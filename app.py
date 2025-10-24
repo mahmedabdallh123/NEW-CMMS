@@ -177,7 +177,7 @@ st.title("🔧 سيرفيس تحضيرات بيل يارن 1")
 if "refresh_data" not in st.session_state:
     st.session_state["refresh_data"] = False
 
-if st.button("🔄 تحديث البيانات من GitHub"):
+if st.button("refresh data "):
     st.session_state["refresh_data"] = True
 
 if check_access():
@@ -191,3 +191,4 @@ if check_access():
     current_tons = st.number_input("عدد الأطنان الحالية:", min_value=0, step=100)
     if st.button("عرض الحالة"):
         check_machine_status(card_num, current_tons, all_sheets)
+
