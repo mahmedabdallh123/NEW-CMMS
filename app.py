@@ -35,8 +35,7 @@ def check_access():
     if st.session_state.get("access_granted", False):
         return True
 
-    st.markdown(
-        """
+    st.markdown("""
         <style>
         .login-box {
             background-color: #f9f9f9;
@@ -54,9 +53,7 @@ def check_access():
             font-weight: bold;
         }
         </style>
-        """,
-        unsafe_allow_html=True
-    )
+    """, unsafe_allow_html=True)
 
     st.markdown('<div class="login-box"><div class="login-title">🔒 تسجيل الدخول</div>', unsafe_allow_html=True)
     password = st.text_input("أدخل كلمة المرور للوصول:", type="password")
@@ -68,7 +65,6 @@ def check_access():
             st.rerun()
         else:
             st.error("❌ كلمة المرور غير صحيحة.")
-    
     st.markdown("</div>", unsafe_allow_html=True)
     return False
 
@@ -107,13 +103,25 @@ def check_machine_status(card_num, current_tons, all_sheets):
 
     card_df = all_sheets[card_sheet_name]
 
-    # 🔧 اختيار نطاق العرض
-    st.subheader("🔧 نطاق العرض")
+    # ===============================
+    # ⚙️ إدخال نطاق العرض
+    # ===============================
+    st.subheader("⚙️ نطاق العرض")
     view_option = st.radio(
         "اختر نطاق العرض:",
-        ("الشريحة الحالية فقط", "كل الشرائح الأقل", "كل الشرائح الأعلى", "كل الشرائح", "نطاق مخصص"),
+        ("الشريحة الحالية فقط", "كل الشرائح الأقل", "كل الشرائح الأعلى", "نطاق مخصص", "كل الشرائح"),
         horizontal=True
     )
+
+    # النطاق المخصص
+    min_range, max_range = None, None
+    if view_option == "نطاق مخصص":
+        st.markdown("#### 🔢 أدخل النطاق المخصص")
+        col1, col2 = st.columns(2)
+        with col1:
+            min_range = st.number_input("من (طن):", min_value=0, step=100, value=max(0, current_tons - 500))
+        with col2:
+            max_range = st.number_input("إلى (طن):", min_value=min_range, step=100, value=current_tons + 500)
 
     # ===============================
     # 🎯 تحديد النطاق حسب الاختيار
@@ -128,12 +136,6 @@ def check_machine_status(card_num, current_tons, all_sheets):
     elif view_option == "كل الشرائح الأعلى":
         selected_slices = service_plan_df[service_plan_df["Min_Tones"] >= current_tons]
     elif view_option == "نطاق مخصص":
-        st.markdown("#### 🔢 أدخل النطاق المخصص")
-        col1, col2 = st.columns(2)
-        with col1:
-            min_range = st.number_input("من (طن):", min_value=0, step=100, value=max(0, current_tons - 500))
-        with col2:
-            max_range = st.number_input("إلى (طن):", min_value=min_range, step=100, value=current_tons + 500)
         selected_slices = service_plan_df[
             (service_plan_df["Min_Tones"] >= min_range) &
             (service_plan_df["Max_Tones"] <= max_range)
@@ -156,7 +158,6 @@ def check_machine_status(card_num, current_tons, all_sheets):
 
         done_services, last_date, last_tons = [], "-", "-"
 
-        # مقارنة الخدمات المنفذة
         for _, row in card_df.iterrows():
             if row.get("Min_Tones", 0) <= current_tons <= row.get("Max_Tones", 0):
                 for col in card_df.columns:
@@ -205,7 +206,7 @@ def check_machine_status(card_num, current_tons, all_sheets):
 # ===============================
 # 🖥 واجهة البرنامج الرئيسية
 # ===============================
-st.title("🔧 سيرفيس تحضيرات بيل يارن 1")
+st.title("🏭 سيرفيس تحضيرات Bail Yarn")
 
 if "refresh_data" not in st.session_state:
     st.session_state["refresh_data"] = False
@@ -220,7 +221,7 @@ if check_access():
 
     all_sheets = load_all_sheets()
 
-    st.write("أدخل رقم الماكينة وعدد الأطنان الحالية لمعرفة حالة الصيانة")
+    st.write("أدخل رقم الماكينة وعدد الأطنان الحالية لمعرفة حالة الصيانة:")
     card_num = st.number_input("رقم الماكينة:", min_value=1, step=1)
     current_tons = st.number_input("عدد الأطنان الحالية:", min_value=0, step=100)
 
