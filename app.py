@@ -68,7 +68,7 @@ def check_machine_status(card_num, current_tons, all_sheets):
         key="view_option"
     )
 
-    # النطاق المخصص (يتخزن كمان)
+    # النطاق المخصص
     min_range = st.session_state.get("min_range", max(0, current_tons - 500))
     max_range = st.session_state.get("max_range", current_tons + 500)
 
@@ -80,7 +80,7 @@ def check_machine_status(card_num, current_tons, all_sheets):
         with col2:
             max_range = st.number_input("إلى (طن):", min_value=min_range, step=100, value=max_range, key="max_range")
 
-    # تحديد الشرائح المطلوبة بناءً على الاختيار
+    # تحديد الشرائح المطلوبة
     if view_option == "الشريحة الحالية فقط":
         selected_slices = service_plan_df[
             (service_plan_df["Min_Tones"] <= current_tons) &
@@ -102,7 +102,6 @@ def check_machine_status(card_num, current_tons, all_sheets):
         st.warning("⚠ لا توجد شرائح مطابقة حسب النطاق المحدد.")
         return
 
-    # معالجة البيانات
     all_results = []
     for _, current_slice in selected_slices.iterrows():
         slice_min = current_slice["Min_Tones"]
@@ -131,22 +130,20 @@ def check_machine_status(card_num, current_tons, all_sheets):
                         if val and val.lower() not in ["nan", "none", ""]:
                             done_services_set.add(col)
 
-            # ✅ قراءة التاريخ بالطريقة المصرية + توحيد الصيغة
+            # ✅ قراءة التاريخ بعد استبدال "\" بـ "/"
             if "Date" in matching_rows.columns:
                 try:
-                    dates = pd.to_datetime(matching_rows["Date"], errors="coerce", dayfirst=True)
+                    # تنظيف القيم
+                    cleaned_dates = matching_rows["Date"].astype(str).str.replace("\\", "/", regex=False)
+                    dates = pd.to_datetime(cleaned_dates, errors="coerce", dayfirst=True)
+
                     if dates.notna().any():
                         idx = dates.idxmax()
-                        last_date_val = matching_rows.loc[idx, "Date"]
-                        # نحاول توحيد الصيغة
-                        if isinstance(last_date_val, pd.Timestamp):
-                            last_date = last_date_val.strftime("%d/%m/%Y")
+                        parsed_date = dates.loc[idx]
+                        if pd.notna(parsed_date):
+                            last_date = parsed_date.strftime("%d/%m/%Y")
                         else:
-                            try:
-                                parsed_date = pd.to_datetime(last_date_val, errors="coerce", dayfirst=True)
-                                last_date = parsed_date.strftime("%d/%m/%Y") if pd.notna(parsed_date) else "-"
-                            except Exception:
-                                last_date = str(last_date_val)
+                            last_date = "-"
                     else:
                         last_date = "-"
                 except Exception as e:
@@ -178,7 +175,7 @@ def check_machine_status(card_num, current_tons, all_sheets):
 
     result_df = pd.DataFrame(all_results)
 
-    # 🎨 تنسيق العرض
+    # 🎨 تنسيق الجدول
     def highlight_cell(val, col_name):
         if col_name == "Service Needed":
             return "background-color: #fff3cd; color:#856404; font-weight:bold;"
@@ -212,6 +209,7 @@ if st.button("عرض الحالة"):
 # حفظ عرض النتائج بعد الضغط
 if st.session_state.get("show_results", False):
     check_machine_status(st.session_state.card_num, st.session_state.current_tons, all_sheets)
+
 
 
 
