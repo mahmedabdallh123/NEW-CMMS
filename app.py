@@ -68,7 +68,7 @@ def check_machine_status(card_num, current_tons, all_sheets):
         key="view_option"
     )
 
-    # النطاق المخصص
+    # النطاق المخصص (يتخزن كمان)
     min_range = st.session_state.get("min_range", max(0, current_tons - 500))
     max_range = st.session_state.get("max_range", current_tons + 500)
 
@@ -102,7 +102,7 @@ def check_machine_status(card_num, current_tons, all_sheets):
         st.warning("⚠ لا توجد شرائح مطابقة حسب النطاق المحدد.")
         return
 
-    # تحليل الشرائح
+    # معالجة البيانات
     all_results = []
     for _, current_slice in selected_slices.iterrows():
         slice_min = current_slice["Min_Tones"]
@@ -112,7 +112,6 @@ def check_machine_status(card_num, current_tons, all_sheets):
         needed_parts = split_needed_services(needed_service_raw)
         needed_norm = [normalize_name(p) for p in needed_parts]
 
-        # صفوف الكارد داخل النطاق
         mask = (
             (card_df.get("Min_Tones", 0).fillna(0) <= slice_max) &
             (card_df.get("Max_Tones", 0).fillna(0) >= slice_min)
@@ -124,7 +123,6 @@ def check_machine_status(card_num, current_tons, all_sheets):
         last_tons = "-"
 
         if not matching_rows.empty:
-            # الخدمات المنفذة بدون تكرار
             ignore_cols = {"card", "Tones", "Min_Tones", "Max_Tones", "Date"}
             for _, r in matching_rows.iterrows():
                 for col in matching_rows.columns:
@@ -133,27 +131,29 @@ def check_machine_status(card_num, current_tons, all_sheets):
                         if val and val.lower() not in ["nan", "none", ""]:
                             done_services_set.add(col)
 
-            # ✅ اكتشاف تلقائي لعمود التاريخ (حتى لو اسمه مختلف)
-            date_col = None
-            for col in matching_rows.columns:
-                if "date" in str(col).lower() or "تاريخ" in str(col):
-                    date_col = col
-                    break
-
-            if date_col:
+            # ✅ قراءة التاريخ بالطريقة المصرية + توحيد الصيغة
+            if "Date" in matching_rows.columns:
                 try:
-                    # تحويل النصوص إلى تواريخ حقيقية
-                    dates = pd.to_datetime(matching_rows[date_col], errors="coerce", dayfirst=True)
+                    dates = pd.to_datetime(matching_rows["Date"], errors="coerce", dayfirst=True)
                     if dates.notna().any():
-                        latest_idx = dates.idxmax()
-                        last_date_val = matching_rows.loc[latest_idx, date_col]
-                        last_date = str(pd.to_datetime(last_date_val, errors="coerce").date())
-                except Exception:
+                        idx = dates.idxmax()
+                        last_date_val = matching_rows.loc[idx, "Date"]
+                        # نحاول توحيد الصيغة
+                        if isinstance(last_date_val, pd.Timestamp):
+                            last_date = last_date_val.strftime("%d/%m/%Y")
+                        else:
+                            try:
+                                parsed_date = pd.to_datetime(last_date_val, errors="coerce", dayfirst=True)
+                                last_date = parsed_date.strftime("%d/%m/%Y") if pd.notna(parsed_date) else "-"
+                            except Exception:
+                                last_date = str(last_date_val)
+                    else:
+                        last_date = "-"
+                except Exception as e:
+                    st.write("⚠ خطأ أثناء قراءة التاريخ:", e)
                     last_date = "-"
-            else:
-                last_date = "-"
 
-            # استخراج أكبر Tones
+            # آخر أطنان
             if "Tones" in matching_rows.columns:
                 try:
                     tons_vals = pd.to_numeric(matching_rows["Tones"], errors="coerce")
@@ -178,7 +178,7 @@ def check_machine_status(card_num, current_tons, all_sheets):
 
     result_df = pd.DataFrame(all_results)
 
-    # تنسيق العرض
+    # 🎨 تنسيق العرض
     def highlight_cell(val, col_name):
         if col_name == "Service Needed":
             return "background-color: #fff3cd; color:#856404; font-weight:bold;"
@@ -190,9 +190,10 @@ def check_machine_status(card_num, current_tons, all_sheets):
             return "background-color: #e7f1ff; color:#004085;"
         return ""
 
-    st.dataframe(result_df.style.apply(lambda row: [highlight_cell(row[col], col) for col in row.index], axis=1), use_container_width=True)
+    def style_table(row):
+        return [highlight_cell(row[col], col) for col in row.index]
 
-# ===============================
+    st.dataframe(result_df.style.apply(style_table, axis=1), use_container_width=True)
 # 🖥 الواجهة الرئيسية
 # ===============================
 st.title("🏭 سيرفيس تحضيرات Bail Yarn")
@@ -211,5 +212,6 @@ if st.button("عرض الحالة"):
 # حفظ عرض النتائج بعد الضغط
 if st.session_state.get("show_results", False):
     check_machine_status(st.session_state.card_num, st.session_state.current_tons, all_sheets)
+
 
 
