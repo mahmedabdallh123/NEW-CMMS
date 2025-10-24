@@ -11,159 +11,172 @@ import time
 
 # ===============================
 # 🔐 إدارة المستخدمين والجلسات
+import streamlit as st
+import json, os
+from datetime import datetime, timedelta
 
-
+# ===============================
+# 🔐 إعدادات الدخول والجلسات
+# ===============================
+USERS_FILE = "users.json"
 STATE_FILE = "state.json"
-SESSION_DURATION = timedelta(minutes=30)  # مدة الجلسة، غيّرها لو حبيت
+SESSION_DURATION = timedelta(minutes=10)  # مدة الجلسة 10 دقائق
+MAX_ACTIVE_USERS = 2  # أقصى عدد مستخدمين مسموح
 
-def read_state_file():
-    """اقرأ state.json بأمان، وإن لم يكن موجودًا تُعيد dict فارغ"""
+# -------------------------------
+# 🧩 دوال مساعدة
+# -------------------------------
+def load_users():
+    """تحميل المستخدمين من users.json"""
+    try:
+        with open(USERS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        st.error("❌ ملف users.json غير موجود!")
+        st.stop()
+    except json.JSONDecodeError:
+        st.error("⚠ ملف users.json غير صالح JSON.")
+        st.stop()
+
+def save_users(users):
+    """حفظ المستخدمين"""
+    with open(USERS_FILE, "w", encoding="utf-8") as f:
+        json.dump(users, f, indent=4, ensure_ascii=False)
+
+def load_state():
+    """قراءة ملف state.json أو إنشاءه"""
     if not os.path.exists(STATE_FILE):
-        # لو مش موجود نُنشئ نسخة افتراضية بنفس التركيبة لو حبيت
-        # هنا لننشئ ملف فارغ كي لا يحصل خطأ، لكن عادة عندك الملف جاهز
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             json.dump({}, f, indent=4, ensure_ascii=False)
         return {}
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except Exception:
-        # لو الملف تالف نعيد dict فارغ (تقدر تعرض تحذير لو حبيت)
+    except:
         return {}
 
-def write_state_file(state):
+def save_state(state):
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=4, ensure_ascii=False)
 
-def cleanup_expired_sessions(state):
-    """نزيل العلامة active للمستخدمين الذين انتهت جلستهم"""
+def cleanup_sessions(state):
+    """إغلاق الجلسات المنتهية"""
     now = datetime.now()
     changed = False
-    for user, info in list(state.items()):
-        login_time = info.get("login_time")
-        if info.get("active") and login_time:
+    for user, info in state.items():
+        if info.get("active") and "login_time" in info:
             try:
-                lt = datetime.fromisoformat(login_time)
-                if now - lt > SESSION_DURATION:
-                    state[user]["active"] = False
-                    state[user].pop("login_time", None)
+                login_time = datetime.fromisoformat(info["login_time"])
+                if now - login_time > SESSION_DURATION:
+                    info["active"] = False
+                    info.pop("login_time", None)
                     changed = True
-            except Exception:
-                # لو صيغة الوقت غير صحيحة نحذفها ونفصل المستخدم
-                state[user]["active"] = False
-                state[user].pop("login_time", None)
+            except:
+                info["active"] = False
                 changed = True
     if changed:
-        write_state_file(state)
+        save_state(state)
     return state
 
-def active_users_list(state):
-    return [u for u,v in state.items() if v.get("active")]
-
-def get_remaining_for_user(state, username):
-    """ترجع الوقت المتبقي كـ timedelta أو None"""
+def remaining_time(state, username):
+    """إرجاع الوقت المتبقي في الجلسة"""
     info = state.get(username)
-    if not info:
-        return None
-    login_time = info.get("login_time")
-    if not login_time:
+    if not info or not info.get("active"):
         return None
     try:
-        lt = datetime.fromisoformat(login_time)
-    except Exception:
+        lt = datetime.fromisoformat(info["login_time"])
+        remaining = SESSION_DURATION - (datetime.now() - lt)
+        if remaining.total_seconds() <= 0:
+            return None
+        return remaining
+    except:
         return None
-    remaining = SESSION_DURATION - (datetime.now() - lt)
-    if remaining.total_seconds() < 0:
-        return None
-    return remaining
 
-# --- واجهة تسجيل الدخول (تستخدم state.json) ---
+# -------------------------------
+# 🧠 واجهة تسجيل الدخول
+# -------------------------------
 def login_ui():
     users = load_users()
+    state = cleanup_sessions(load_state())
+
     if "logged_in" not in st.session_state:
         st.session_state.logged_in = False
         st.session_state.username = None
 
-    st.title("🔐 تسجيل الدخول")
-    username = st.text_input("اسم المستخدم")
-    password = st.text_input("كلمة المرور", type="password")
+    st.title("🔐 تسجيل الدخول - Bail Yarn")
 
-    active_count = sum(1 for user in users.values() if user["active"])
-    st.caption(f"🔒 المستخدمون النشطون الآن: {active_count} / 2")
+    username = st.selectbox("👤 اختر المستخدم", list(users.keys()))
+    password = st.text_input("🔑 كلمة المرور", type="password")
 
-    # ✅ في حالة تسجيل الدخول
+    active_users = [u for u, v in state.items() if v.get("active")]
+    active_count = len(active_users)
+
+    st.caption(f"🔒 المستخدمون النشطون الآن: {active_count} / {MAX_ACTIVE_USERS}")
+
     if not st.session_state.logged_in:
         if st.button("تسجيل الدخول"):
             if username in users and users[username]["password"] == password:
-                if users[username]["active"]:
+                if username == "admin":  # 👑 الأدمن له أولوية الدخول
+                    pass
+                elif username in active_users:
                     st.warning("⚠ هذا المستخدم مسجل دخول بالفعل.")
-                elif active_count >= 2:
-                    st.error("🚫 الحد الأقصى لعدد المستخدمين المتصلين (2).")
-                else:
-                    users[username]["active"] = True
-                    save_users(users)
-                    st.session_state.logged_in = True
-                    st.session_state.username = username
-                    st.success(f"✅ تم تسجيل الدخول: {username}")
-                    st.experimental_set_query_params(refresh="1")
-            else:
-                st.error("❌ اسم المستخدم أو كلمة المرور غير صحيحة.")
-        return False
+                    return False
+                elif active_count >= MAX_ACTIVE_USERS:
+                    st.error("🚫 الحد الأقصى للمستخدمين المتصلين حالياً.")
+                    return False
 
+                # ✅ تسجيل الدخول
+                state[username] = {"active": True, "login_time": datetime.now().isoformat()}
+                save_state(state)
+                st.session_state.logged_in = True
+                st.session_state.username = username
+                st.success(f"✅ تم تسجيل الدخول: {username}")
+                st.rerun()
+            else:
+                st.error("❌ كلمة المرور غير صحيحة.")
+        return False
     else:
-        st.success(f"✅ تم تسجيل الدخول: {st.session_state.username}")
-        if st.button("تسجيل الخروج"):
-            users[st.session_state.username]["active"] = False
-            save_users(users)
-            st.session_state.logged_in = False
-            st.session_state.username = None
-            st.experimental_set_query_params(refresh="1")
+        username = st.session_state.username
+        st.success(f"✅ مسجل الدخول كـ: {username}")
+        rem = remaining_time(state, username)
+        if rem:
+            mins, secs = divmod(int(rem.total_seconds()), 60)
+            st.info(f"⏳ الوقت المتبقي: {mins:02d}:{secs:02d}")
+        else:
+            st.warning("⏰ انتهت الجلسة، سيتم تسجيل الخروج.")
+            logout_action()
+        if st.button("🚪 تسجيل الخروج"):
+            logout_action()
         return True
 
+# -------------------------------
+# 🚪 تسجيل الخروج
+# -------------------------------
 def logout_action():
-    state = read_state_file()
+    state = load_state()
     username = st.session_state.get("username")
     if username and username in state:
         state[username]["active"] = False
         state[username].pop("login_time", None)
-        write_state_file(state)
+        save_state(state)
     st.session_state.clear()
-    st.experimental_rerun()
+    st.rerun()
 
-# --- زر تسجيل الخروج وعداد المدة في الـ sidebar ---
-def sidebar_session_panel():
-    state = read_state_file()
-    state = cleanup_expired_sessions(state)
-    username = st.session_state.get("username")
-    if username and state.get(username, {}).get("active"):
-        remaining = get_remaining_for_user(state, username)
-        if remaining:
-            mins = remaining.seconds // 60
-            secs = remaining.seconds % 60
-            st.sidebar.success(f"👋 مرحباً {username}")
-            st.sidebar.markdown(f"⏳ *الوقت المتبقي:* {mins:02d}:{secs:02d}")
-        else:
-            st.sidebar.warning("⏰ انتهت الجلسة. الرجاء تسجيل الدخول مجددًا.")
-        if st.sidebar.button("🚪 تسجيل الخروج"):
-            logout_action()
-    else:
-        # لو مش مسجل نظهر واجهة الدخول
-        if st.sidebar.button("تسجيل دخول"):
-            # نعرض حقول الدخول داخل الدالة login_ui عند الضغط
-            pass
-
-# --- التنفيذ في أعلى التطبيق ---
+# -------------------------------
+# 🧭 تنفيذ النظام
+# -------------------------------
 if not st.session_state.get("logged_in"):
-    # لو مش مسجل سيعرض sidebar حقول الدخول
-    logged = login_ui()
-    if not logged:
-        # لو لم يُسجل بنجاح نوقف تنفيذ باقي الصفحة
+    if not login_ui():
         st.stop()
-
-# لو وصل هنا يبقى مسجل
-sidebar_session_panel()
-# --- نهاية كود إدارة الدخول والجلسات ---
-# ===============================
+else:
+    sidebar_placeholder = st.sidebar.empty()
+    username = st.session_state.username
+    rem = remaining_time(load_state(), username)
+    if rem:
+        mins, secs = divmod(int(rem.total_seconds()), 60)
+        sidebar_placeholder.success(f"👋 {username} | ⏳ {mins:02d}:{secs:02d}")
+    else:
+        logout_action()
 # ⚙ إعدادات أساسية
 # ===============================
 GITHUB_EXCEL_URL = "https://github.com/mahmedabdallh123/NEW-CMMS/raw/refs/heads/main/Machine_Service_Lookup.xlsx"
@@ -406,6 +419,7 @@ if st.button("عرض الحالة"):
 
 if st.session_state.get("show_results", False) and all_sheets:
     check_machine_status(st.session_state.card_num, st.session_state.current_tons, all_sheets)
+
 
 
 
