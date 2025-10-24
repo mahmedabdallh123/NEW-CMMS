@@ -8,7 +8,7 @@ import os
 # ===============================
 # ⚙ إعدادات أساسية
 # ===============================
-GITHUB_EXCEL_URL = "https://github.com/mahmedabdallh123/cmms/raw/refs/heads/main/Machine_Service_Lookup.xlsx"
+GITHUB_EXCEL_URL = "https://github.com/mahmedabdallh123/NEW-CMMS/raw/refs/heads/main/Machine_Service_Lookup.xlsx"
 PASSWORD = "1224"
 LOCAL_FILE = "Machine_Service_Lookup.xlsx"
 
@@ -67,66 +67,139 @@ def split_needed_services(needed_service_str):
 # 🔍 تحليل حالة الماكينة
 # ===============================
 def check_machine_status(card_num, current_tons, all_sheets):
-    results = []
-
-    for sheet_name, df in all_sheets.items():
-        df = df.copy()
-        df.columns = df.columns.str.strip()
-
-        if "Machine No" not in df.columns or "Tons" not in df.columns:
-            continue
-
-        df_filtered = df[df["Machine No"].astype(str).str.contains(str(card_num), case=False, na=False)]
-        if df_filtered.empty:
-            continue
-
-        df_filtered = df_filtered.sort_values("Tons")
-        df_filtered["Service Needed"] = df_filtered["Service Needed"].fillna("")
-        df_filtered["Service Done"] = df_filtered["Service Done"].fillna("")
-        df_filtered["Date"] = df_filtered["Date"].astype(str)
-
-        # استخراج نطاق الخدمات بناءً على التون
-        mask = df_filtered["Tons"] <= current_tons
-        relevant_rows = df_filtered[mask].copy()
-
-        if relevant_rows.empty:
-            continue
-
-        results.append(relevant_rows)
-
-    if not results:
-        st.warning("⚠ لا توجد بيانات مطابقة.")
+    if not all_sheets or "ServicePlan" not in all_sheets:
+        st.error("❌ الملف لا يحتوي على شيت ServicePlan.")
         return
 
-    combined = pd.concat(results, ignore_index=True)
+    service_plan_df = all_sheets["ServicePlan"]
+    card_sheet_name = f"Card{card_num}"
 
-    # ✅ تطبيق تنسيق ألوان على الأعمدة
-    def color_cells(val):
-        val = str(val).lower()
-        if "needed" in val:
-            return "background-color: #FFF3CD; color: #856404;"  # أصفر
-        elif "done" in val:
-            return "background-color: #D4EDDA; color: #155724;"  # أخضر
-        elif "delay" in val:
-            return "background-color: #F8D7DA; color: #721C24;"  # أحمر
-        return ""
+    if card_sheet_name not in all_sheets:
+        st.warning(f"⚠ لا يوجد شيت باسم {card_sheet_name}")
+        return
 
-    styled = combined.style.applymap(color_cells, subset=["Service Needed", "Service Done"])
+    card_df = all_sheets[card_sheet_name]
 
-    # ✅ عرض الجدول بعرض الشاشة
-    st.markdown("### 📊 نتائج الفحص")
-    st.dataframe(
-        styled,
-        use_container_width=True,
-        height=450,
+    # حفظ اختيار النطاق
+    if "view_option" not in st.session_state:
+        st.session_state.view_option = "الشريحة الحالية فقط"
+
+    st.subheader("⚙ نطاق العرض")
+    view_option = st.radio(
+        "اختر نطاق العرض:",
+        ("الشريحة الحالية فقط", "كل الشرائح الأقل", "كل الشرائح الأعلى", "نطاق مخصص", "كل الشرائح"),
+        horizontal=True,
+        key="view_option"
     )
 
-    # ✅ زر حفظ الجدول المعدل كملف Excel
-    buffer = io.BytesIO()
-    combined.to_excel(buffer, index=False, engine="openpyxl")
-    st.download_button(
-        label="💾 حفظ النتائج كملف Excel",
-        data=buffer.getvalue(),
-        file_name="Service_Report.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-    )
+    # نطاق مخصص
+    min_range = st.session_state.get("min_range", max(0, current_tons - 500))
+    max_range = st.session_state.get("max_range", current_tons + 500)
+
+    if view_option == "نطاق مخصص":
+        st.markdown("#### 🔢 أدخل النطاق المخصص")
+        col1, col2 = st.columns(2)
+        with col1:
+            min_range = st.number_input("من (طن):", min_value=0, step=100, value=min_range, key="min_range")
+        with col2:
+            max_range = st.number_input("إلى (طن):", min_value=min_range, step=100, value=max_range, key="max_range")
+
+    # تحديد الشرائح المطلوبة
+    if view_option == "الشريحة الحالية فقط":
+        selected_slices = service_plan_df[(service_plan_df["Min_Tones"] <= current_tons) & (service_plan_df["Max_Tones"] >= current_tons)]
+    elif view_option == "كل الشرائح الأقل":
+        selected_slices = service_plan_df[service_plan_df["Max_Tones"] <= current_tons]
+    elif view_option == "كل الشرائح الأعلى":
+        selected_slices = service_plan_df[service_plan_df["Min_Tones"] >= current_tons]
+    elif view_option == "نطاق مخصص":
+        selected_slices = service_plan_df[(service_plan_df["Min_Tones"] >= min_range) & (service_plan_df["Max_Tones"] <= max_range)]
+    else:
+        selected_slices = service_plan_df.copy()
+
+    if selected_slices.empty:
+        st.warning("⚠ لا توجد شرائح مطابقة حسب النطاق المحدد.")
+        return
+
+    all_results = []
+    for _, current_slice in selected_slices.iterrows():
+        slice_min = current_slice["Min_Tones"]
+        slice_max = current_slice["Max_Tones"]
+        needed_service_raw = current_slice.get("Service", "")
+        needed_parts = split_needed_services(needed_service_raw)
+        needed_norm = [normalize_name(p) for p in needed_parts]
+
+        mask = (card_df.get("Min_Tones", 0).fillna(0) <= slice_max) & (card_df.get("Max_Tones", 0).fillna(0) >= slice_min)
+        matching_rows = card_df[mask]
+
+        done_services_set = set()
+        last_date = "-"
+        last_tons = "-"
+
+        if not matching_rows.empty:
+            ignore_cols = {"card", "Tones", "Min_Tones", "Max_Tones", "Date"}
+            for _, r in matching_rows.iterrows():
+                for col in matching_rows.columns:
+                    if col not in ignore_cols:
+                        val = str(r.get(col, "")).strip()
+                        if val and val.lower() not in ["nan", "none", ""]:
+                            done_services_set.add(col)
+
+            # ✅ قراءة التاريخ
+            if "Date" in matching_rows.columns:
+                try:
+                    cleaned_dates = matching_rows["Date"].astype(str).str.replace("\\", "/", regex=False)
+                    dates = pd.to_datetime(cleaned_dates, errors="coerce", dayfirst=True)
+                    if dates.notna().any():
+                        idx = dates.idxmax()
+                        parsed_date = dates.loc[idx]
+                        last_date = parsed_date.strftime("%d/%m/%Y") if pd.notna(parsed_date) else "-"
+                except Exception:
+                    last_date = "-"
+
+            if "Tones" in matching_rows.columns:
+                tons_vals = pd.to_numeric(matching_rows["Tones"], errors="coerce")
+                if tons_vals.notna().any():
+                    last_tons = int(tons_vals.max())
+
+        done_services = sorted(list(done_services_set))
+        done_norm = [normalize_name(c) for c in done_services]
+        not_done = [orig for orig, n in zip(needed_parts, needed_norm) if n not in done_norm]
+
+        all_results.append({
+            "Min_Tons": slice_min,
+            "Max_Tons": slice_max,
+            "Service Needed": " + ".join(needed_parts) if needed_parts else "-",
+            "Done Services": ", ".join(done_services) if done_services else "-",
+            "Not Done Services": ", ".join(not_done) if not_done else "-",
+            "Last Date": last_date,
+            "Last Tones": last_tons,
+        })
+
+    result_df = pd.DataFrame(all_results)
+    st.dataframe(result_df, use_container_width=True)
+
+# ===============================
+# 🖥 الواجهة الرئيسية
+# ===============================
+st.title("🏭 سيرفيس تحضيرات Bail Yarn")
+
+# 🔄 زر التحديث من GitHub
+if st.button("🔄 تحديث البيانات من GitHub"):
+    fetch_from_github()
+
+if "last_update" in st.session_state:
+    st.caption(f"🕒 آخر تحديث: {st.session_state['last_update']}")
+
+all_sheets = load_all_sheets()
+
+col1, col2 = st.columns(2)
+with col1:
+    card_num = st.number_input("رقم الماكينة:", min_value=1, step=1, key="card_num")
+with col2:
+    current_tons = st.number_input("عدد الأطنان الحالية:", min_value=0, step=100, key="current_tons")
+
+if st.button("عرض الحالة"):
+    st.session_state["show_results"] = True
+
+if st.session_state.get("show_results", False) and all_sheets:
+    check_machine_status(st.session_state.card_num, st.session_state.current_tons, all_sheets)
