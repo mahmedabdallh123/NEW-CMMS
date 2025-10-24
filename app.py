@@ -67,7 +67,6 @@ def check_machine_status(card_num, current_tons, all_sheets):
         key="view_option"
     )
 
-    # النطاق المخصص
     min_range = st.session_state.get("min_range", max(0, current_tons - 500))
     max_range = st.session_state.get("max_range", current_tons + 500)
 
@@ -129,17 +128,14 @@ def check_machine_status(card_num, current_tons, all_sheets):
                         if val and val.lower() not in ["nan", "none", ""]:
                             done_services_set.add(col)
 
-            # ✅ قراءة التاريخ بعد استبدال "\" بـ "/"
+            # ✅ قراءة التاريخ
             if "Date" in matching_rows.columns:
                 cleaned_dates = matching_rows["Date"].astype(str).str.replace("\\", "/", regex=False)
                 dates = pd.to_datetime(cleaned_dates, errors="coerce", dayfirst=True)
                 if dates.notna().any():
                     parsed_date = dates.max()
                     last_date = parsed_date.strftime("%d/%m/%Y") if pd.notna(parsed_date) else "-"
-                else:
-                    last_date = "-"
 
-            # آخر أطنان
             if "Tones" in matching_rows.columns:
                 tons_vals = pd.to_numeric(matching_rows["Tones"], errors="coerce")
                 if tons_vals.notna().any():
@@ -161,40 +157,24 @@ def check_machine_status(card_num, current_tons, all_sheets):
 
     result_df = pd.DataFrame(all_results)
 
-    # 🎨 تنسيق الجدول + عرضه بكامل الشاشة
-    st.markdown("""
-        <style>
-        [data-testid="stDataFrame"] table {
-            width: 100%;
-            table-layout: auto;
-            word-wrap: break-word;
-            white-space: normal;
-        }
-        th, td {
-            text-align: center !important;
-            vertical-align: middle !important;
-            padding: 8px !important;
-            font-size: 15px !important;
-        }
-        </style>
-    """, unsafe_allow_html=True)
+    # 🎨 HTML تنسيق
+    styled_html = result_df.style.set_table_styles([
+        {'selector': 'th', 'props': [('background-color', '#007bff'), ('color', 'white'), ('text-align', 'center')]},
+        {'selector': 'td', 'props': [('text-align', 'center'), ('white-space', 'normal'), ('word-wrap', 'break-word')]}
+    ]).set_properties({
+        'border': '1px solid #ccc',
+        'padding': '8px',
+        'font-size': '15px'
+    }).to_html()
 
-    # تلوين الأعمدة
-    def highlight_cell(val, col_name):
-        if col_name == "Service Needed":
-            return "background-color: #fff3cd; color:#856404; font-weight:bold;"
-        elif col_name == "Done Services":
-            return "background-color: #d4edda; color:#155724; font-weight:bold;"
-        elif col_name == "Not Done Services":
-            return "background-color: #f8d7da; color:#721c24; font-weight:bold;"
-        elif col_name in ["Last Date", "Last Tones"]:
-            return "background-color: #e7f1ff; color:#004085;"
-        return ""
-
-    def style_table(row):
-        return [highlight_cell(row[col], col) for col in row.index]
-
-    st.dataframe(result_df.style.apply(style_table, axis=1), use_container_width=True)
+    st.markdown(
+        f"""
+        <div style="overflow-x:auto; width:100%;">
+            {styled_html}
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
 
 # ===============================
