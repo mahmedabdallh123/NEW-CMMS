@@ -11,29 +11,35 @@ GITHUB_EXCEL_URL = "https://github.com/mahmedabdallh123/cmms/raw/refs/heads/main
 PASSWORD = "1224"
 
 # ===============================
-# 📂 تحميل البيانات من GitHub
+# 🔄 تحديث الملف من GitHub
 # ===============================
-@st.cache_data(show_spinner=False)
-def load_all_sheets():
-    local_file = "Machine_Service_Lookup.xlsx"
-    r = requests.get(GITHUB_EXCEL_URL, stream=True)
-    with open(local_file, 'wb') as f:
-        shutil.copyfileobj(r.raw, f)
-    sheets = pd.read_excel(local_file, sheet_name=None)
-    for name, df in sheets.items():
-        df.columns = df.columns.str.strip()
-    return sheets
 def fetch_from_github():
     """تحميل الملف من GitHub وتحديث النسخة المحلية"""
     try:
-        response = requests.get(GITHUB_EXCEL_URL)
+        response = requests.get(GITHUB_EXCEL_URL, stream=True)
         response.raise_for_status()
         with open("Machine_Service_Lookup.xlsx", "wb") as f:
-            f.write(response.content)
+            shutil.copyfileobj(response.raw, f)
         st.success("✅ تم تحديث البيانات من GitHub بنجاح.")
         st.cache_data.clear()  # مسح الكاش عشان يقرأ النسخة الجديدة
     except Exception as e:
         st.error(f"⚠ فشل التحديث من GitHub: {e}")
+
+# ===============================
+# 📂 تحميل البيانات (من الملف المحلي فقط)
+# ===============================
+@st.cache_data(show_spinner=False)
+def load_all_sheets():
+    local_file = "Machine_Service_Lookup.xlsx"
+    try:
+        sheets = pd.read_excel(local_file, sheet_name=None)
+        for name, df in sheets.items():
+            df.columns = df.columns.str.strip()
+        return sheets
+    except FileNotFoundError:
+        st.error("❌ لم يتم العثور على الملف المحلي. برجاء التحديث من GitHub أولًا.")
+        return None
+
 # ===============================
 # 🧰 دوال مساعدة
 # ===============================
@@ -50,6 +56,9 @@ def split_needed_services(needed_service_str):
         return []
     parts = re.split(r"\+|,|\n|;", needed_service_str)
     return [p.strip() for p in parts if p.strip() != ""]
+
+# ===============================
+
 
 # ===============================
 # 🔍 تحليل حالة الماكينة
@@ -219,5 +228,6 @@ if st.button("عرض الحالة"):
 # حفظ عرض النتائج بعد الضغط
 if st.session_state.get("show_results", False):
     check_machine_status(st.session_state.card_num, st.session_state.current_tons, all_sheets)
+
 
 
