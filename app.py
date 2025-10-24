@@ -60,10 +60,7 @@ def check_machine_status(card_num, current_tons, all_sheets):
     if "view_option" not in st.session_state:
         st.session_state.view_option = "الشريحة الحالية فقط"
 
-    # ===============================
-    # ⚙️ إدخال نطاق العرض
-    # ===============================
-    st.subheader("⚙️ نطاق العرض")
+    st.subheader("⚙ نطاق العرض")
     view_option = st.radio(
         "اختر نطاق العرض:",
         ("الشريحة الحالية فقط", "كل الشرائح الأقل", "كل الشرائح الأعلى", "نطاق مخصص", "كل الشرائح"),
@@ -83,9 +80,7 @@ def check_machine_status(card_num, current_tons, all_sheets):
         with col2:
             max_range = st.number_input("إلى (طن):", min_value=min_range, step=100, value=max_range, key="max_range")
 
-    # ===============================
-    # 🎯 تحديد النطاق حسب الاختيار
-    # ===============================
+    # تحديد الشرائح المطلوبة بناءً على الاختيار
     if view_option == "الشريحة الحالية فقط":
         selected_slices = service_plan_df[
             (service_plan_df["Min_Tones"] <= current_tons) &
@@ -107,32 +102,66 @@ def check_machine_status(card_num, current_tons, all_sheets):
         st.warning("⚠ لا توجد شرائح مطابقة حسب النطاق المحدد.")
         return
 
-    # ===============================
-    # 🧮 تحليل البيانات
-    # ===============================
+    # الآن لكل شريحة نبحث عن صفوف card_df التي تتقاطع مع نطاق الشريحة نفسها
     all_results = []
     for _, current_slice in selected_slices.iterrows():
-        needed_service_raw = current_slice["Service"]
+        slice_min = current_slice["Min_Tones"]
+        slice_max = current_slice["Max_Tones"]
+
+        needed_service_raw = current_slice.get("Service", "")
         needed_parts = split_needed_services(needed_service_raw)
         needed_norm = [normalize_name(p) for p in needed_parts]
 
-        done_services, last_date, last_tons = [], "-", "-"
-        for _, row in card_df.iterrows():
-            if row.get("Min_Tones", 0) <= current_tons <= row.get("Max_Tones", 0):
-                for col in card_df.columns:
-                    if col not in ["card", "Tones", "Min_Tones", "Max_Tones", "Date"]:
-                        val = str(row.get(col, "")).strip()
-                        if val and val.lower() not in ["nan", "none", ""]:
-                            done_services.append(col)
-                last_date = row.get("Date", "-")
-                last_tons = row.get("Tones", "-")
+        # صفوف الكارد التي تتقاطع مع نطاق الشريحة (overlap)
+        mask = (
+            (card_df.get("Min_Tones", 0).fillna(0) <= slice_max) &
+            (card_df.get("Max_Tones", 0).fillna(0) >= slice_min)
+        )
+        matching_rows = card_df[mask]
 
+        done_services_set = set()
+        last_date = "-"
+        last_tons = "-"
+
+        if not matching_rows.empty:
+            # نجمع الخدمات من كل الصفوف المطابقة بدون تكرار
+            ignore_cols = {"card", "Tones", "Min_Tones", "Max_Tones", "Date"}
+            for _, r in matching_rows.iterrows():
+                for col in matching_rows.columns:
+                    if col not in ignore_cols:
+                        val = str(r.get(col, "")).strip()
+                        if val and val.lower() not in ["nan", "none", ""]:
+                            done_services_set.add(col)
+
+            # نحاول استخراج آخر تاريخ من عمود Date إن وُجد (باستخدام pandas to_datetime)
+            if "Date" in matching_rows.columns:
+                try:
+                    dates = pd.to_datetime(matching_rows["Date"], errors="coerce")
+                    if dates.notna().any():
+                        idx = dates.idxmax()
+                        last_date_val = matching_rows.loc[idx, "Date"]
+                        last_date = last_date_val if pd.notna(last_date_val) else "-"
+                    else:
+                        last_date = "-"
+                except Exception:
+                    last_date = "-"
+
+            # كخيار بديل أو لإظهار الـ Tons الأخير، نأخذ أكبر قيمة في عمود Tones لو موجود
+            if "Tones" in matching_rows.columns:
+                try:
+                    tons_vals = pd.to_numeric(matching_rows["Tones"], errors="coerce")
+                    if tons_vals.notna().any():
+                        last_tons = int(tons_vals.max())
+                except Exception:
+                    last_tons = "-"
+
+        done_services = sorted(list(done_services_set))
         done_norm = [normalize_name(c) for c in done_services]
         not_done = [orig for orig, n in zip(needed_parts, needed_norm) if n not in done_norm]
 
         all_results.append({
-            "Min_Tons": current_slice["Min_Tones"],
-            "Max_Tons": current_slice["Max_Tones"],
+            "Min_Tons": slice_min,
+            "Max_Tons": slice_max,
             "Service Needed": " + ".join(needed_parts) if needed_parts else "-",
             "Done Services": ", ".join(done_services) if done_services else "-",
             "Not Done Services": ", ".join(not_done) if not_done else "-",
@@ -142,9 +171,7 @@ def check_machine_status(card_num, current_tons, all_sheets):
 
     result_df = pd.DataFrame(all_results)
 
-    # ===============================
-    # 🎨 عرض الجدول
-    # ===============================
+    # تنسيق الجدول للعرض
     def highlight_cell(val, col_name):
         if col_name == "Service Needed":
             return "background-color: #fff3cd; color:#856404; font-weight:bold;"
@@ -180,3 +207,4 @@ if st.button("عرض الحالة"):
 # حفظ عرض النتائج بعد الضغط
 if st.session_state.get("show_results", False):
     check_machine_status(st.session_state.card_num, st.session_state.current_tons, all_sheets)
+
