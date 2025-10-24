@@ -8,7 +8,7 @@ import os
 # ===============================
 # ⚙ إعدادات أساسية
 # ===============================
-GITHUB_EXCEL_URL = "https://github.com/mahmedabdallh123/NEW-CMMS/raw/refs/heads/main/Machine_Service_Lookup.xlsx"
+GITHUB_EXCEL_URL = "https://github.com/mahmedabdallh123/cmms/raw/refs/heads/main/Machine_Service_Lookup.xlsx"
 PASSWORD = "1224"
 LOCAL_FILE = "Machine_Service_Lookup.xlsx"
 
@@ -203,4 +203,3 @@ if st.button("عرض الحالة"):
 
 if st.session_state.get("show_results", False) and all_sheets:
     check_machine_status(st.session_state.card_num, st.session_state.current_tons, all_sheets)
-
