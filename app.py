@@ -5,7 +5,7 @@ import requests
 import shutil
 
 # ===============================
-# ⚙️ إعدادات أساسية
+# ⚙ إعدادات أساسية
 # ===============================
 GITHUB_EXCEL_URL = "https://github.com/mahmedabdallh123/NEW-CMMS/raw/refs/heads/main/Machine_Service_Lookup.xlsx"
 PASSWORD = "1234"
@@ -56,7 +56,6 @@ def check_machine_status(card_num, current_tons, all_sheets):
         return
     card_df = all_sheets[card_sheet_name]
 
-    # حفظ اختيار النطاق في session
     if "view_option" not in st.session_state:
         st.session_state.view_option = "الشريحة الحالية فقط"
 
@@ -132,32 +131,19 @@ def check_machine_status(card_num, current_tons, all_sheets):
 
             # ✅ قراءة التاريخ بعد استبدال "\" بـ "/"
             if "Date" in matching_rows.columns:
-                try:
-                    # تنظيف القيم
-                    cleaned_dates = matching_rows["Date"].astype(str).str.replace("\\", "/", regex=False)
-                    dates = pd.to_datetime(cleaned_dates, errors="coerce", dayfirst=True)
-
-                    if dates.notna().any():
-                        idx = dates.idxmax()
-                        parsed_date = dates.loc[idx]
-                        if pd.notna(parsed_date):
-                            last_date = parsed_date.strftime("%d/%m/%Y")
-                        else:
-                            last_date = "-"
-                    else:
-                        last_date = "-"
-                except Exception as e:
-                    st.write("⚠ خطأ أثناء قراءة التاريخ:", e)
+                cleaned_dates = matching_rows["Date"].astype(str).str.replace("\\", "/", regex=False)
+                dates = pd.to_datetime(cleaned_dates, errors="coerce", dayfirst=True)
+                if dates.notna().any():
+                    parsed_date = dates.max()
+                    last_date = parsed_date.strftime("%d/%m/%Y") if pd.notna(parsed_date) else "-"
+                else:
                     last_date = "-"
 
             # آخر أطنان
             if "Tones" in matching_rows.columns:
-                try:
-                    tons_vals = pd.to_numeric(matching_rows["Tones"], errors="coerce")
-                    if tons_vals.notna().any():
-                        last_tons = int(tons_vals.max())
-                except Exception:
-                    last_tons = "-"
+                tons_vals = pd.to_numeric(matching_rows["Tones"], errors="coerce")
+                if tons_vals.notna().any():
+                    last_tons = int(tons_vals.max())
 
         done_services = sorted(list(done_services_set))
         done_norm = [normalize_name(c) for c in done_services]
@@ -175,7 +161,25 @@ def check_machine_status(card_num, current_tons, all_sheets):
 
     result_df = pd.DataFrame(all_results)
 
-    # 🎨 تنسيق الجدول
+    # 🎨 تنسيق الجدول + عرضه بكامل الشاشة
+    st.markdown("""
+        <style>
+        [data-testid="stDataFrame"] table {
+            width: 100%;
+            table-layout: auto;
+            word-wrap: break-word;
+            white-space: normal;
+        }
+        th, td {
+            text-align: center !important;
+            vertical-align: middle !important;
+            padding: 8px !important;
+            font-size: 15px !important;
+        }
+        </style>
+    """, unsafe_allow_html=True)
+
+    # تلوين الأعمدة
     def highlight_cell(val, col_name):
         if col_name == "Service Needed":
             return "background-color: #fff3cd; color:#856404; font-weight:bold;"
@@ -191,6 +195,9 @@ def check_machine_status(card_num, current_tons, all_sheets):
         return [highlight_cell(row[col], col) for col in row.index]
 
     st.dataframe(result_df.style.apply(style_table, axis=1), use_container_width=True)
+
+
+# ===============================
 # 🖥 الواجهة الرئيسية
 # ===============================
 st.title("🏭 سيرفيس تحضيرات Bail Yarn")
@@ -206,10 +213,5 @@ with col2:
 if st.button("عرض الحالة"):
     st.session_state["show_results"] = True
 
-# حفظ عرض النتائج بعد الضغط
 if st.session_state.get("show_results", False):
     check_machine_status(st.session_state.card_num, st.session_state.current_tons, all_sheets)
-
-
-
-
