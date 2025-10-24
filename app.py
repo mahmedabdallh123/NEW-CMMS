@@ -107,11 +107,11 @@ def check_machine_status(card_num, current_tons, all_sheets):
 
     card_df = all_sheets[card_sheet_name]
 
-    # 🔽 إضافة اختيار نوع العرض
+    # 🔽 اختيار نوع العرض
     st.subheader("🔧 نطاق العرض")
     view_option = st.radio(
         "اختر نطاق العرض:",
-        ("الشريحة الحالية فقط", "كل الشرائح الأقل", "كل الشرائح الأعلى", "كل الشرائح"),
+        ("الشريحة الحالية فقط", "كل الشرائح الأقل", "كل الشرائح الأعلى", "كل الشرائح", "نطاق مخصص"),
         horizontal=True
     )
 
@@ -124,6 +124,16 @@ def check_machine_status(card_num, current_tons, all_sheets):
         selected_slices = service_plan_df[service_plan_df["Max_Tones"] <= current_tons]
     elif view_option == "كل الشرائح الأعلى":
         selected_slices = service_plan_df[service_plan_df["Min_Tones"] >= current_tons]
+    elif view_option == "نطاق مخصص":
+        col1, col2 = st.columns(2)
+        with col1:
+            min_range = st.number_input("من (طن):", min_value=0, step=100, value=max(0, current_tons - 500))
+        with col2:
+            max_range = st.number_input("إلى (طن):", min_value=min_range, step=100, value=current_tons)
+        selected_slices = service_plan_df[
+            (service_plan_df["Min_Tones"] >= min_range) & 
+            (service_plan_df["Max_Tones"] <= max_range)
+        ]
     else:
         selected_slices = service_plan_df.copy()
 
