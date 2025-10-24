@@ -206,7 +206,18 @@ if mode == "📋 عرض البيانات":
 
     if "last_update" in st.session_state:
         st.caption(f"🕒 آخر تحديث: {st.session_state['last_update']}")
-
+# ===============================
+# 📂 تحميل كل الشيتات من ملف Excel
+# ===============================
+@st.cache_data
+def load_all_sheets():
+    try:
+        # هنا بتحدد اسم ملف الإكسيل اللي عليه الداتا
+        path = "Machine_Service_Lookup.xlsx"
+        return pd.read_excel(path, sheet_name=None)
+    except FileNotFoundError:
+        st.error("❌ لم يتم العثور على ملف Machine_Service_Lookup.xlsx في المجلد.")
+        return {}
     all_sheets = load_all_sheets()
 
     col1, col2 = st.columns(2)
@@ -511,6 +522,7 @@ if st.button("عرض الحالة"):
 
 if st.session_state.get("show_results", False) and all_sheets:
     check_machine_status(st.session_state.card_num, st.session_state.current_tons, all_sheets)
+
 
 
 
