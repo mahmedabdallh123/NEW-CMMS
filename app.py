@@ -15,67 +15,22 @@ PASSWORD = "1234"
 # ===============================
 @st.cache_data(show_spinner=False)
 def load_all_sheets():
-    try:
-        local_file = "Machine_Service_Lookup.xlsx"
-        r = requests.get(GITHUB_EXCEL_URL, stream=True)
-        with open(local_file, 'wb') as f:
-            shutil.copyfileobj(r.raw, f)
-        sheets = pd.read_excel(local_file, sheet_name=None)
-        for name, df in sheets.items():
-            df.columns = df.columns.str.strip()
-        return sheets
-    except Exception as e:
-        st.error(f"❌ خطأ أثناء تحميل الملف من GitHub: {e}")
-        st.stop()
+    local_file = "Machine_Service_Lookup.xlsx"
+    r = requests.get(GITHUB_EXCEL_URL, stream=True)
+    with open(local_file, 'wb') as f:
+        shutil.copyfileobj(r.raw, f)
+    sheets = pd.read_excel(local_file, sheet_name=None)
+    for name, df in sheets.items():
+        df.columns = df.columns.str.strip()
+    return sheets
 
 # ===============================
-# 🎨 واجهة تسجيل الدخول
-# ===============================
-def check_access():
-    if st.session_state.get("access_granted", False):
-        return True
-
-    st.markdown("""
-        <style>
-        .login-box {
-            background-color: #f9f9f9;
-            padding: 40px;
-            border-radius: 20px;
-            box-shadow: 0 0 15px rgba(0,0,0,0.1);
-            width: 380px;
-            margin: 120px auto;
-            text-align: center;
-        }
-        .login-title {
-            font-size: 26px;
-            color: #333;
-            margin-bottom: 20px;
-            font-weight: bold;
-        }
-        </style>
-    """, unsafe_allow_html=True)
-
-    st.markdown('<div class="login-box"><div class="login-title">🔒 تسجيل الدخول</div>', unsafe_allow_html=True)
-    password = st.text_input("أدخل كلمة المرور للوصول:", type="password")
-
-    if st.button("تأكيد الدخول"):
-        if password == PASSWORD:
-            st.session_state["access_granted"] = True
-            st.success("✅ تم تسجيل الدخول بنجاح.")
-            st.rerun()
-        else:
-            st.error("❌ كلمة المرور غير صحيحة.")
-    st.markdown("</div>", unsafe_allow_html=True)
-    return False
-
-# ===============================
-# 🧰 دوال النظام
+# 🧰 دوال مساعدة
 # ===============================
 def normalize_name(s):
     if s is None:
         return ""
-    s = str(s)
-    s = s.replace("\n", "+")
+    s = str(s).replace("\n", "+")
     s = re.sub(r"[^0-9a-zA-Z\u0600-\u06FF\+\s_/.-]", " ", s)
     s = re.sub(r"\s+", " ", s).strip().lower()
     return s
@@ -90,18 +45,20 @@ def split_needed_services(needed_service_str):
 # 🔍 تحليل حالة الماكينة
 # ===============================
 def check_machine_status(card_num, current_tons, all_sheets):
-    if "ServicePlan" not in all_sheets or "Machine" not in all_sheets:
-        st.error("❌ الملف لازم يحتوي على شيتين: 'Machine' و 'ServicePlan'")
+    if "ServicePlan" not in all_sheets:
+        st.error("❌ الملف لازم يحتوي على شيت 'ServicePlan'")
         return
 
     service_plan_df = all_sheets["ServicePlan"]
     card_sheet_name = f"Card{card_num}"
-
     if card_sheet_name not in all_sheets:
         st.warning(f"⚠ لا يوجد شيت باسم {card_sheet_name}")
         return
-
     card_df = all_sheets[card_sheet_name]
+
+    # حفظ اختيار النطاق في session
+    if "view_option" not in st.session_state:
+        st.session_state.view_option = "الشريحة الحالية فقط"
 
     # ===============================
     # ⚙️ إدخال نطاق العرض
@@ -110,18 +67,21 @@ def check_machine_status(card_num, current_tons, all_sheets):
     view_option = st.radio(
         "اختر نطاق العرض:",
         ("الشريحة الحالية فقط", "كل الشرائح الأقل", "كل الشرائح الأعلى", "نطاق مخصص", "كل الشرائح"),
-        horizontal=True
+        horizontal=True,
+        key="view_option"
     )
 
-    # النطاق المخصص
-    min_range, max_range = None, None
+    # النطاق المخصص (يتخزن كمان)
+    min_range = st.session_state.get("min_range", max(0, current_tons - 500))
+    max_range = st.session_state.get("max_range", current_tons + 500)
+
     if view_option == "نطاق مخصص":
         st.markdown("#### 🔢 أدخل النطاق المخصص")
         col1, col2 = st.columns(2)
         with col1:
-            min_range = st.number_input("من (طن):", min_value=0, step=100, value=max(0, current_tons - 500))
+            min_range = st.number_input("من (طن):", min_value=0, step=100, value=min_range, key="min_range")
         with col2:
-            max_range = st.number_input("إلى (طن):", min_value=min_range, step=100, value=current_tons + 500)
+            max_range = st.number_input("إلى (طن):", min_value=min_range, step=100, value=max_range, key="max_range")
 
     # ===============================
     # 🎯 تحديد النطاق حسب الاختيار
@@ -157,7 +117,6 @@ def check_machine_status(card_num, current_tons, all_sheets):
         needed_norm = [normalize_name(p) for p in needed_parts]
 
         done_services, last_date, last_tons = [], "-", "-"
-
         for _, row in card_df.iterrows():
             if row.get("Min_Tones", 0) <= current_tons <= row.get("Max_Tones", 0):
                 for col in card_df.columns:
@@ -184,7 +143,7 @@ def check_machine_status(card_num, current_tons, all_sheets):
     result_df = pd.DataFrame(all_results)
 
     # ===============================
-    # 🎨 تنسيق الجدول
+    # 🎨 عرض الجدول
     # ===============================
     def highlight_cell(val, col_name):
         if col_name == "Service Needed":
@@ -200,30 +159,24 @@ def check_machine_status(card_num, current_tons, all_sheets):
     def style_table(row):
         return [highlight_cell(row[col], col) for col in row.index]
 
-    styled_df = result_df.style.apply(style_table, axis=1)
-    st.dataframe(styled_df, use_container_width=True)
+    st.dataframe(result_df.style.apply(style_table, axis=1), use_container_width=True)
 
 # ===============================
-# 🖥 واجهة البرنامج الرئيسية
+# 🖥 الواجهة الرئيسية
 # ===============================
 st.title("🏭 سيرفيس تحضيرات Bail Yarn")
 
-if "refresh_data" not in st.session_state:
-    st.session_state["refresh_data"] = False
+all_sheets = load_all_sheets()
 
-if st.button("🔄 تحديث البيانات"):
-    st.session_state["refresh_data"] = True
+col1, col2 = st.columns(2)
+with col1:
+    card_num = st.number_input("رقم الماكينة:", min_value=1, step=1, key="card_num")
+with col2:
+    current_tons = st.number_input("عدد الأطنان الحالية:", min_value=0, step=100, key="current_tons")
 
-if check_access():
-    if st.session_state["refresh_data"]:
-        load_all_sheets.clear()
-        st.session_state["refresh_data"] = False
+if st.button("عرض الحالة"):
+    st.session_state["show_results"] = True
 
-    all_sheets = load_all_sheets()
-
-    st.write("أدخل رقم الماكينة وعدد الأطنان الحالية لمعرفة حالة الصيانة:")
-    card_num = st.number_input("رقم الماكينة:", min_value=1, step=1)
-    current_tons = st.number_input("عدد الأطنان الحالية:", min_value=0, step=100)
-
-    if st.button("عرض الحالة"):
-        check_machine_status(card_num, current_tons, all_sheets)
+# حفظ عرض النتائج بعد الضغط
+if st.session_state.get("show_results", False):
+    check_machine_status(st.session_state.card_num, st.session_state.current_tons, all_sheets)
