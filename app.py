@@ -15,6 +15,10 @@ import streamlit as st
 import json, os
 from datetime import datetime, timedelta
 
+import streamlit as st
+import json, os
+from datetime import datetime, timedelta
+
 # ===============================
 # 🔐 إعدادات الدخول والجلسات
 # ===============================
@@ -39,7 +43,6 @@ def load_users():
         st.stop()
 
 def save_users(users):
-    """حفظ المستخدمين"""
     with open(USERS_FILE, "w", encoding="utf-8") as f:
         json.dump(users, f, indent=4, ensure_ascii=False)
 
@@ -80,6 +83,8 @@ def cleanup_sessions(state):
 
 def remaining_time(state, username):
     """إرجاع الوقت المتبقي في الجلسة"""
+    if not username or username not in state:
+        return None
     info = state.get(username)
     if not info or not info.get("active"):
         return None
@@ -91,6 +96,19 @@ def remaining_time(state, username):
         return remaining
     except:
         return None
+
+# -------------------------------
+# 🚪 تسجيل الخروج
+# -------------------------------
+def logout_action():
+    state = load_state()
+    username = st.session_state.get("username")
+    if username and username in state:
+        state[username]["active"] = False
+        state[username].pop("login_time", None)
+        save_state(state)
+    st.session_state.clear()
+    st.rerun()
 
 # -------------------------------
 # 🧠 واجهة تسجيل الدخول
@@ -105,20 +123,19 @@ def login_ui():
 
     st.title("🔐 تسجيل الدخول - Bail Yarn")
 
-    username = st.selectbox("👤 اختر المستخدم", list(users.keys()))
+    username_input = st.selectbox("👤 اختر المستخدم", list(users.keys()))
     password = st.text_input("🔑 كلمة المرور", type="password")
 
     active_users = [u for u, v in state.items() if v.get("active")]
     active_count = len(active_users)
-
     st.caption(f"🔒 المستخدمون النشطون الآن: {active_count} / {MAX_ACTIVE_USERS}")
 
     if not st.session_state.logged_in:
         if st.button("تسجيل الدخول"):
-            if username in users and users[username]["password"] == password:
-                if username == "admin":  # 👑 الأدمن له أولوية الدخول
+            if username_input in users and users[username_input]["password"] == password:
+                if username_input == "admin":  # 👑 الأدمن له أولوية الدخول
                     pass
-                elif username in active_users:
+                elif username_input in active_users:
                     st.warning("⚠ هذا المستخدم مسجل دخول بالفعل.")
                     return False
                 elif active_count >= MAX_ACTIVE_USERS:
@@ -126,11 +143,11 @@ def login_ui():
                     return False
 
                 # ✅ تسجيل الدخول
-                state[username] = {"active": True, "login_time": datetime.now().isoformat()}
+                state[username_input] = {"active": True, "login_time": datetime.now().isoformat()}
                 save_state(state)
                 st.session_state.logged_in = True
-                st.session_state.username = username
-                st.success(f"✅ تم تسجيل الدخول: {username}")
+                st.session_state.username = username_input
+                st.success(f"✅ تم تسجيل الدخول: {username_input}")
                 st.rerun()
             else:
                 st.error("❌ كلمة المرور غير صحيحة.")
@@ -150,31 +167,19 @@ def login_ui():
         return True
 
 # -------------------------------
-# 🚪 تسجيل الخروج
-# -------------------------------
-def logout_action():
-    state = load_state()
-    username = st.session_state.get("username")
-    if username and username in state:
-        state[username]["active"] = False
-        state[username].pop("login_time", None)
-        save_state(state)
-    st.session_state.clear()
-    st.rerun()
-
-# -------------------------------
 # 🧭 تنفيذ النظام
 # -------------------------------
 if not st.session_state.get("logged_in"):
     if not login_ui():
         st.stop()
 else:
-    sidebar_placeholder = st.sidebar.empty()
+    state = load_state()
+    state = cleanup_sessions(state)
     username = st.session_state.username
-    rem = remaining_time(load_state(), username)
+    rem = remaining_time(state, username)
     if rem:
         mins, secs = divmod(int(rem.total_seconds()), 60)
-        sidebar_placeholder.success(f"👋 {username} | ⏳ {mins:02d}:{secs:02d}")
+        st.sidebar.success(f"👋 {username} | ⏳ {mins:02d}:{secs:02d}")
     else:
         logout_action()
 # ⚙ إعدادات أساسية
@@ -419,6 +424,7 @@ if st.button("عرض الحالة"):
 
 if st.session_state.get("show_results", False) and all_sheets:
     check_machine_status(st.session_state.card_num, st.session_state.current_tons, all_sheets)
+
 
 
 
