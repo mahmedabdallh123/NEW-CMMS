@@ -6,57 +6,89 @@ import io
 import requests
 import shutil
 import re
+from datetime import datetime, timedelta
+import time
 
 # ===============================
-# 🔐 نظام تسجيل الدخول (يُكتب بعد المكتبات)
+# 🔐 إدارة المستخدمين والجلسات
 # ===============================
+
+STATE_FILE = "state.json"
+SESSION_DURATION = timedelta(minutes=30)  # ⏱ مدة الجلسة 30 دقيقة
+
+# ✅ تحميل المستخدمين من ملف JSON
 def load_users():
-    with open("state.json", "r", encoding="utf-8") as f:
+    with open("users.json", "r", encoding="utf-8") as f:
         return json.load(f)
 
-def save_users(data):
-    with open("state.json", "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
+# ✅ حفظ حالة الجلسة
+def save_state(state):
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=4)
 
+# ✅ تحميل حالة الجلسة
+def load_state():
+    if os.path.exists(STATE_FILE):
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            try:
+                return json.load(f)
+            except:
+                return {}
+    return {}
+
+# ✅ تسجيل الدخول
 def login():
-    st.title("🔐 تسجيل الدخول - Bail Yarn")
-    username = st.text_input("اسم المستخدم:")
-    password = st.text_input("كلمة المرور:", type="password")
-    if st.button("تسجيل الدخول"):
-        users = load_users()
-        if username in users and users[username]["password"] == password:
-            if not users[username].get("active", False):
-                users[username]["active"] = True
-                save_users(users)
-                st.session_state["logged_in"] = True
-                st.session_state["username"] = username
-                st.success(f"✅ تم تسجيل الدخول بنجاح كـ {username}")
-                st.rerun()
-            else:
-                st.error("⚠ هذا المستخدم مسجّل دخول بالفعل من جهاز آخر.")
+    users = load_users()
+    state = load_state()
+
+    # لو فيه جلسة سارية
+    if "username" in state and "login_time" in state:
+        login_time = datetime.fromisoformat(state["login_time"])
+        elapsed = datetime.now() - login_time
+
+        if elapsed < SESSION_DURATION:
+            remaining = SESSION_DURATION - elapsed
+
+            # 🕒 عرض العداد الزمني في الشريط الجانبي
+            st.sidebar.success(f"👋 مرحبًا {state['username']}")
+            st.sidebar.markdown(
+                f"⏳ <b>الوقت المتبقي:</b> {remaining.seconds//60:02d}:{remaining.seconds%60:02d} دقيقة",
+                unsafe_allow_html=True
+            )
+
+            # ✅ تحديث الجلسة باستمرار عند أي تفاعل
+            state["login_time"] = datetime.now().isoformat()
+            save_state(state)
+
+            return True
         else:
-            st.error("❌ اسم المستخدم أو كلمة المرور غير صحيحة.")
+            st.warning("⏰ انتهت الجلسة. الرجاء تسجيل الدخول من جديد.")
+            os.remove(STATE_FILE)
 
-def logout():
-    if "username" in st.session_state:
-        users = load_users()
-        user = st.session_state["username"]
-        if user in users:
-            users[user]["active"] = False
-            save_users(users)
-    st.session_state.clear()
-    st.rerun()
+    st.sidebar.header("🔐 تسجيل الدخول - Bail Yarn")
 
-# التحقق من حالة تسجيل الدخول
-if "logged_in" not in st.session_state or not st.session_state["logged_in"]:
-    login()
+    username = st.sidebar.text_input("اسم المستخدم:")
+    password = st.sidebar.text_input("كلمة المرور:", type="password")
+    login_btn = st.sidebar.button("تسجيل الدخول")
+
+    if login_btn:
+        if username in users and users[username] == password:
+            state = {
+                "username": username,
+                "login_time": datetime.now().isoformat()
+            }
+            save_state(state)
+            st.sidebar.success(f"✅ تم تسجيل الدخول بنجاح! أهلاً {username}")
+            st.rerun()
+        else:
+            st.sidebar.error("❌ اسم المستخدم أو كلمة المرور غير صحيحة.")
+            return False
+
+    return "username" in state
+
+# ✅ التحقق في البداية
+if not login():
     st.stop()
-
-st.sidebar.button("🚪 تسجيل الخروج", on_click=logout)
-
-# ===============================
-# ⬇ هنا يبدأ الكود العادي للتطبيق (باقي الكود)
-# ===============================
 # ===============================
 # ⚙ إعدادات أساسية
 # ===============================
@@ -300,6 +332,7 @@ if st.button("عرض الحالة"):
 
 if st.session_state.get("show_results", False) and all_sheets:
     check_machine_status(st.session_state.card_num, st.session_state.current_tons, all_sheets)
+
 
 
 
