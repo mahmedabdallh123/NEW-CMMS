@@ -11,11 +11,7 @@ import time
 
 # ===============================
 # 🔐 إدارة المستخدمين والجلسات
-# --- بدء كود إدارة المستخدمين والجلسات (يستخدم state.json الموجود لديك) ---
-import streamlit as st
-import json
-import os
-from datetime import datetime, timedelta
+
 
 STATE_FILE = "state.json"
 SESSION_DURATION = timedelta(minutes=30)  # مدة الجلسة، غيّرها لو حبيت
@@ -83,72 +79,46 @@ def get_remaining_for_user(state, username):
 
 # --- واجهة تسجيل الدخول (تستخدم state.json) ---
 def login_ui():
-    state = read_state_file()
-    state = cleanup_expired_sessions(state)  # تنظيف الجلسات المنتهية أولاً
+    users = load_users()
+    if "logged_in" not in st.session_state:
+        st.session_state.logged_in = False
+        st.session_state.username = None
 
-    # لو مستخدم سجل دخول بالفعل في الجلسة الحالية
-    if st.session_state.get("logged_in") and st.session_state.get("username"):
-        username = st.session_state["username"]
-        # نتحقق إن حسابه لا يزال مفعل في الملف وإلا نُخرج
-        if state.get(username, {}).get("active"):
-            return True
-        else:
-            # إذا لم يعد مفعل (مثلاً انتهت الجلسة في ملف)، نُخرج
-            st.session_state.pop("logged_in", None)
-            st.session_state.pop("username", None)
+    st.title("🔐 تسجيل الدخول")
+    username = st.text_input("اسم المستخدم")
+    password = st.text_input("كلمة المرور", type="password")
 
-    st.sidebar.header("🔐 تسجيل الدخول")
+    active_count = sum(1 for user in users.values() if user["active"])
+    st.caption(f"🔒 المستخدمون النشطون الآن: {active_count} / 2")
 
-    username = st.sidebar.text_input("اسم المستخدم")
-    password = st.sidebar.text_input("كلمة المرور", type="password")
-    login_btn = st.sidebar.button("تسجيل الدخول")
+    # ✅ في حالة تسجيل الدخول
+    if not st.session_state.logged_in:
+        if st.button("تسجيل الدخول"):
+            if username in users and users[username]["password"] == password:
+                if users[username]["active"]:
+                    st.warning("⚠ هذا المستخدم مسجل دخول بالفعل.")
+                elif active_count >= 2:
+                    st.error("🚫 الحد الأقصى لعدد المستخدمين المتصلين (2).")
+                else:
+                    users[username]["active"] = True
+                    save_users(users)
+                    st.session_state.logged_in = True
+                    st.session_state.username = username
+                    st.success(f"✅ تم تسجيل الدخول: {username}")
+                    st.experimental_set_query_params(refresh="1")
+            else:
+                st.error("❌ اسم المستخدم أو كلمة المرور غير صحيحة.")
+        return False
 
-    # بعد عرض معلومات الهيدر نعرض عدد المستخدمين النشطين
-    active = active_users_list(state)
-    st.sidebar.write(f"🔒 المستخدمون النشطون الآن: {len(active)} / 2")
-    if active:
-        st.sidebar.write(", ".join(active))
-
-    if login_btn:
-        # تحقق من وجود اليوزر في state.json وباسورد مطابق
-        user_info = state.get(username)
-        if not user_info:
-            st.sidebar.error("❌ اسم المستخدم غير موجود في state.json")
-            return False
-        if str(user_info.get("password", "")) != str(password):
-            st.sidebar.error("❌ كلمة المرور غير صحيحة")
-            return False
-
-        # تنظيف المستخدمين المنتهية ثم إعادة حساب النشطين
-        state = cleanup_expired_sessions(state)
-        active = active_users_list(state)
-
-        if username in active:
-            # لو المستخدم نفسه مسجل سابقًا نُحدث وقت الدخول لتجديد الجلسة
-            state[username]["login_time"] = datetime.now().isoformat()
-            write_state_file(state)
-            st.session_state["logged_in"] = True
-            st.session_state["username"] = username
-            st.success(f"✅ جددنا جلستك، أهلاً {username}")
-            st.experimental_rerun()
-            return True
-
-        if len(active) >= 2:
-            st.sidebar.error("🚫 الحد الأقصى للمستخدمين النشطين هو 2 الآن. جرب لاحقًا.")
-            return False
-
-        # تسجيل الدخول الناجح
-        state[username]["active"] = True
-        state[username]["login_time"] = datetime.now().isoformat()
-        write_state_file(state)
-
-        st.session_state["logged_in"] = True
-        st.session_state["username"] = username
-        st.sidebar.success(f"✅ تم تسجيل الدخول: {username}")
-        st.experimental_rerun()
+    else:
+        st.success(f"✅ تم تسجيل الدخول: {st.session_state.username}")
+        if st.button("تسجيل الخروج"):
+            users[st.session_state.username]["active"] = False
+            save_users(users)
+            st.session_state.logged_in = False
+            st.session_state.username = None
+            st.experimental_set_query_params(refresh="1")
         return True
-
-    return False
 
 def logout_action():
     state = read_state_file()
@@ -436,6 +406,7 @@ if st.button("عرض الحالة"):
 
 if st.session_state.get("show_results", False) and all_sheets:
     check_machine_status(st.session_state.card_num, st.session_state.current_tons, all_sheets)
+
 
 
 
