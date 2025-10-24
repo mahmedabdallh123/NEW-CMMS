@@ -172,16 +172,103 @@ def login_ui():
 if not st.session_state.get("logged_in"):
     if not login_ui():
         st.stop()
+# -------------------------------
+# 🎛 بعد تسجيل الدخول - اختيار الوضع
+# -------------------------------
+state = load_state()
+state = cleanup_sessions(state)
+username = st.session_state.username
+rem = remaining_time(state, username)
+
+if rem:
+    mins, secs = divmod(int(rem.total_seconds()), 60)
+    st.sidebar.success(f"👋 {username} | ⏳ {mins:02d}:{secs:02d}")
 else:
-    state = load_state()
-    state = cleanup_sessions(state)
-    username = st.session_state.username
-    rem = remaining_time(state, username)
-    if rem:
-        mins, secs = divmod(int(rem.total_seconds()), 60)
-        st.sidebar.success(f"👋 {username} | ⏳ {mins:02d}:{secs:02d}")
-    else:
-        logout_action()
+    logout_action()
+
+# ===============================
+# 🧭 اختيار الوضع
+# ===============================
+mode = st.sidebar.radio(
+    "اختر الوضع:",
+    ["📋 عرض البيانات", "✍ إدخال بيانات جديدة"],
+    horizontal=False
+)
+
+# ===============================
+# 📋 وضع العرض
+# ===============================
+if mode == "📋 عرض البيانات":
+    st.title("🏭 سيرفيس تحضيرات Bail Yarn - عرض البيانات")
+
+    if st.button("🔄 تحديث البيانات من GitHub"):
+        fetch_from_github()
+
+    if "last_update" in st.session_state:
+        st.caption(f"🕒 آخر تحديث: {st.session_state['last_update']}")
+
+    all_sheets = load_all_sheets()
+
+    col1, col2 = st.columns(2)
+    with col1:
+        card_num = st.number_input("رقم الماكينة:", min_value=1, step=1, key="card_num")
+    with col2:
+        current_tons = st.number_input("عدد الأطنان الحالية:", min_value=0, step=100, key="current_tons")
+
+    if st.button("عرض الحالة"):
+        st.session_state["show_results"] = True
+
+    if st.session_state.get("show_results", False) and all_sheets:
+        check_machine_status(st.session_state.card_num, st.session_state.current_tons, all_sheets)
+
+# ===============================
+# ✍ وضع الإدخال
+# ===============================
+elif mode == "✍ إدخال بيانات جديدة":
+    st.title("🧾 إدخال بيانات صيانة جديدة")
+
+    # تحميل الملف المحلي
+    if not os.path.exists(LOCAL_FILE):
+        st.error("❌ الملف المحلي غير موجود. اضغط تحديث البيانات أولاً.")
+        st.stop()
+
+    sheets = load_all_sheets()
+    sheet_names = [name for name in sheets.keys() if name.startswith("Card")]
+    selected_sheet = st.selectbox("اختر الماكينة:", sheet_names)
+
+    if selected_sheet:
+        df = sheets[selected_sheet]
+
+        with st.form("entry_form", clear_on_submit=True):
+            st.subheader("🧩 إدخال التفاصيل")
+            date = st.date_input("📅 التاريخ", datetime.today())
+            tones = st.number_input("⚙ عدد الأطنان", min_value=0, step=100)
+            other = st.text_input("🧠 ملاحظات إضافية (Other)")
+            servised_by = st.text_input("👷 تم بواسطة (Servised by)")
+
+            st.markdown("### 🧰 الخدمات المنفذة:")
+            service_cols = [c for c in df.columns if c not in ["Date", "Tones", "Other", "Servised by", "Min_Tones", "Max_Tones", "card"]]
+            selected_services = st.multiselect("اختر الخدمات:", service_cols)
+
+            submitted = st.form_submit_button("💾 حفظ الإدخال")
+            if submitted:
+                # إنشاء صف جديد
+                new_row = {
+                    "Date": date.strftime("%d/%m/%Y"),
+                    "Tones": tones,
+                    "Other": other,
+                    "Servised by": servised_by
+                }
+                for col in service_cols:
+                    new_row[col] = "✔" if col in selected_services else ""
+
+                # إضافة الصف للإكسيل
+                new_df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
+                with pd.ExcelWriter(LOCAL_FILE, mode="a", if_sheet_exists="replace", engine="openpyxl") as writer:
+                    new_df.to_excel(writer, sheet_name=selected_sheet, index=False)
+
+                st.success("✅ تم حفظ البيانات بنجاح في الملف المحلي.")
+                st.info("📤 يمكنك رفع التحديث يدويًا إلى GitHub عبر GitHub Desktop.")
 # ⚙ إعدادات أساسية
 # ===============================
 GITHUB_EXCEL_URL = "https://github.com/mahmedabdallh123/NEW-CMMS/raw/refs/heads/main/Machine_Service_Lookup.xlsx"
@@ -424,6 +511,7 @@ if st.button("عرض الحالة"):
 
 if st.session_state.get("show_results", False) and all_sheets:
     check_machine_status(st.session_state.card_num, st.session_state.current_tons, all_sheets)
+
 
 
 
