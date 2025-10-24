@@ -23,7 +23,17 @@ def load_all_sheets():
     for name, df in sheets.items():
         df.columns = df.columns.str.strip()
     return sheets
-
+def fetch_from_github():
+    """تحميل الملف من GitHub وتحديث النسخة المحلية"""
+    try:
+        response = requests.get(GITHUB_EXCEL_URL)
+        response.raise_for_status()
+        with open("Machine_Service_Lookup.xlsx", "wb") as f:
+            f.write(response.content)
+        st.success("✅ تم تحديث البيانات من GitHub بنجاح.")
+        st.cache_data.clear()  # مسح الكاش عشان يقرأ النسخة الجديدة
+    except Exception as e:
+        st.error(f"⚠ فشل التحديث من GitHub: {e}")
 # ===============================
 # 🧰 دوال مساعدة
 # ===============================
@@ -40,17 +50,7 @@ def split_needed_services(needed_service_str):
         return []
     parts = re.split(r"\+|,|\n|;", needed_service_str)
     return [p.strip() for p in parts if p.strip() != ""]
-def fetch_from_github():
-    """تحميل الملف من GitHub وتحديث النسخة المحلية"""
-    try:
-        response = requests.get(GITHUB_EXCEL_URL)
-        response.raise_for_status()
-        with open("Machine_Service_Lookup.xlsx", "wb") as f:
-            f.write(response.content)
-        st.success("✅ تم تحديث البيانات من GitHub بنجاح.")
-        st.cache_data.clear()  # مسح الكاش عشان يقرأ النسخة الجديدة
-    except Exception as e:
-        st.error(f"⚠ فشل التحديث من GitHub: {e}")
+
 # ===============================
 # 🔍 تحليل حالة الماكينة
 # ===============================
@@ -219,4 +219,5 @@ if st.button("عرض الحالة"):
 # حفظ عرض النتائج بعد الضغط
 if st.session_state.get("show_results", False):
     check_machine_status(st.session_state.card_num, st.session_state.current_tons, all_sheets)
+
 
