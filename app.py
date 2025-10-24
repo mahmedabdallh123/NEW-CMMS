@@ -191,23 +191,29 @@ def check_machine_status(card_num, current_tons, all_sheets):
     # ✅ إزالة الصفوف الفارغة وإعادة الفهرسة
     result_df = result_df.dropna(how="all").reset_index(drop=True)
 
-    # 🎨 تنسيق الجدول
+    # 🎨 تنسيق الجدول - كل عمود بلون مختلف لتمييز البيانات
     def highlight_cell(val, col_name):
-        if col_name == "Service Needed":
-            return "background-color: #fff3cd; color:#856404; font-weight:bold;"
-        elif col_name == "Done Services":
-            return "background-color: #d4edda; color:#155724; font-weight:bold;"
-        elif col_name == "Not Done Services":
-            return "background-color: #f8d7da; color:#721c24; font-weight:bold;"
-        elif col_name in ["Last Date", "Last Tones"]:
-            return "background-color: #e7f1ff; color:#004085;"
-        return ""
+        color_map = {
+            "Service Needed": "background-color: #fff3cd; color:#856404; font-weight:bold;",   # أصفر فاتح
+            "Done Services": "background-color: #d4edda; color:#155724; font-weight:bold;",     # أخضر فاتح
+            "Not Done Services": "background-color: #f8d7da; color:#721c24; font-weight:bold;", # أحمر فاتح
+            "Last Date": "background-color: #e7f1ff; color:#004085; font-weight:bold;",         # أزرق فاتح
+            "Last Tones": "background-color: #f0f0f0; color:#333; font-weight:bold;",           # رمادي فاتح
+            "Other": "background-color: #e2f0d9; color:#2e6f32; font-weight:bold;",             # أخضر باهت
+            "Servised by": "background-color: #fdebd0; color:#7d6608; font-weight:bold;",       # بيج
+            "Min_Tons": "background-color: #ebf5fb; color:#154360; font-weight:bold;",          # أزرق باهت
+            "Max_Tons": "background-color: #f9ebea; color:#641e16; font-weight:bold;",          # وردي باهت
+        }
+        return color_map.get(col_name, "")
 
     def style_table(row):
         return [highlight_cell(row[col], col) for col in row.index]
 
+    st.markdown("### 📋 نتائج الفحص")
     st.dataframe(result_df.style.apply(style_table, axis=1), use_container_width=True)
-    # ✅ تحميل النتائج
+
+    # ✅ تحميل النتائج كملف Excel
+    import io
     buffer = io.BytesIO()
     result_df.to_excel(buffer, index=False, engine="openpyxl")
     st.download_button(
@@ -242,6 +248,7 @@ if st.button("عرض الحالة"):
 
 if st.session_state.get("show_results", False) and all_sheets:
     check_machine_status(st.session_state.card_num, st.session_state.current_tons, all_sheets)
+
 
 
 
