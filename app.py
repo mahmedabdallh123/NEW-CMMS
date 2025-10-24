@@ -29,7 +29,7 @@ def load_all_sheets():
         st.stop()
 
 # ===============================
-# 🎨 واجهة تسجيل الدخول بالباسورد فقط
+# 🎨 واجهة تسجيل الدخول
 # ===============================
 def check_access():
     if st.session_state.get("access_granted", False):
@@ -107,7 +107,7 @@ def check_machine_status(card_num, current_tons, all_sheets):
 
     card_df = all_sheets[card_sheet_name]
 
-    # 🔽 اختيار نوع العرض
+    # 🔧 اختيار نطاق العرض
     st.subheader("🔧 نطاق العرض")
     view_option = st.radio(
         "اختر نطاق العرض:",
@@ -115,6 +115,9 @@ def check_machine_status(card_num, current_tons, all_sheets):
         horizontal=True
     )
 
+    # ===============================
+    # 🎯 تحديد النطاق حسب الاختيار
+    # ===============================
     if view_option == "الشريحة الحالية فقط":
         selected_slices = service_plan_df[
             (service_plan_df["Min_Tones"] <= current_tons) &
@@ -125,22 +128,26 @@ def check_machine_status(card_num, current_tons, all_sheets):
     elif view_option == "كل الشرائح الأعلى":
         selected_slices = service_plan_df[service_plan_df["Min_Tones"] >= current_tons]
     elif view_option == "نطاق مخصص":
+        st.markdown("#### 🔢 أدخل النطاق المخصص")
         col1, col2 = st.columns(2)
         with col1:
             min_range = st.number_input("من (طن):", min_value=0, step=100, value=max(0, current_tons - 500))
         with col2:
-            max_range = st.number_input("إلى (طن):", min_value=min_range, step=100, value=current_tons)
+            max_range = st.number_input("إلى (طن):", min_value=min_range, step=100, value=current_tons + 500)
         selected_slices = service_plan_df[
-            (service_plan_df["Min_Tones"] >= min_range) & 
+            (service_plan_df["Min_Tones"] >= min_range) &
             (service_plan_df["Max_Tones"] <= max_range)
         ]
     else:
         selected_slices = service_plan_df.copy()
 
     if selected_slices.empty:
-        st.warning("⚠ لا توجد شرائح مطابقة حسب الاختيار.")
+        st.warning("⚠ لا توجد شرائح مطابقة حسب النطاق المحدد.")
         return
 
+    # ===============================
+    # 🧮 تحليل البيانات
+    # ===============================
     all_results = []
     for _, current_slice in selected_slices.iterrows():
         needed_service_raw = current_slice["Service"]
@@ -148,6 +155,8 @@ def check_machine_status(card_num, current_tons, all_sheets):
         needed_norm = [normalize_name(p) for p in needed_parts]
 
         done_services, last_date, last_tons = [], "-", "-"
+
+        # مقارنة الخدمات المنفذة
         for _, row in card_df.iterrows():
             if row.get("Min_Tones", 0) <= current_tons <= row.get("Max_Tones", 0):
                 for col in card_df.columns:
@@ -173,6 +182,9 @@ def check_machine_status(card_num, current_tons, all_sheets):
 
     result_df = pd.DataFrame(all_results)
 
+    # ===============================
+    # 🎨 تنسيق الجدول
+    # ===============================
     def highlight_cell(val, col_name):
         if col_name == "Service Needed":
             return "background-color: #fff3cd; color:#856404; font-weight:bold;"
