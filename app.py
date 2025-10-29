@@ -19,6 +19,7 @@ except Exception:
 # ===============================
 # إعدادات عامة
 # ===============================
+
 USERS_FILE = "users.json"
 STATE_FILE = "state.json"
 SESSION_DURATION = timedelta(minutes=30)
@@ -32,55 +33,49 @@ LOCAL_FILE = "Machine_Service_Lookup.xlsx"
 GITHUB_EXCEL_RAW_BASE = f"https://raw.githubusercontent.com/{REPO_NAME}/{BRANCH}/{FILE_PATH}"
 
 # -------------------------------
-# دوال مسح الذاكرة المؤقتة - محسنة
+# دوال مسح الذاكرة المؤقتة - محسنة نهائياً
 # -------------------------------
-def clear_cache_and_reload():
-    """مسح الذاكرة المؤقتة وإعادة تحميل البيانات"""
+
+def clear_all_cache():
+    """مسح كامل للذاكرة المؤقتة - نهائي"""
     try:
-        # مسح ذاكرة التخزين المؤقت لـ pandas
-        if hasattr(pd, 'read_excel'):
-            # إعادة تحميل pandas module
-            import importlib
-            importlib.reload(pd)
+        # مسح كل البيانات المؤقتة من الجلسة
+        keys_to_keep = ['logged_in', 'username']
+        keys_to_remove = []
         
-        # إعادة تعيين حالة الجلسة
-        keys_to_clear = ['sheets_data', 'excel_data', 'last_loaded', 'cached_sheets']
-        for key in list(st.session_state.keys()):
-            if key in keys_to_clear:
-                del st.session_state[key]
+        for key in st.session_state.keys():
+            if key not in keys_to_keep:
+                keys_to_remove.append(key)
         
-        # إضافة تأخير بسيط لضمان مسح الذاكرة المؤقتة
-        time.sleep(0.5)
+        for key in keys_to_remove:
+            del st.session_state[key]
         
-        st.success("✅ تم تحديث البيانات بنجاح")
-        time.sleep(1)
-        st.rerun()
+        # تنظيف ذاكرة pandas
+        import gc
+        gc.collect()
+        
         return True
     except Exception as e:
         st.error(f"❌ خطأ في مسح الذاكرة المؤقتة: {e}")
         return False
 
-def force_refresh():
-    """تحديث قسري للبيانات"""
+def force_complete_refresh():
+    """تحديث كامل وقسري للبيانات"""
     try:
-        # مسح جميع المتغيرات المؤقتة
-        import gc
-        gc.collect()
+        # مسح كامل للذاكرة المؤقتة
+        clear_all_cache()
         
-        # إعادة تعيين جلسة streamlit
-        for key in list(st.session_state.keys()):
-            if key not in ['logged_in', 'username']:
-                del st.session_state[key]
-        
-        st.success("🔄 تم التحديث القسري للبيانات")
+        # إعادة تحميل الصفحة
+        st.success("🔄 تم التحديث الكامل للبيانات")
         time.sleep(2)
         st.rerun()
     except Exception as e:
-        st.error(f"❌ خطأ في التحديث القسري: {e}")
+        st.error(f"❌ خطأ في التحديث: {e}")
 
 # -------------------------------
 # دوال الملفات والمستخدمين
 # -------------------------------
+
 def load_users():
     """تحميل بيانات المستخدمين"""
     if not os.path.exists(USERS_FILE):
@@ -153,33 +148,40 @@ def remaining_time(state, username):
         return None
 
 # -------------------------------
-# دوال GitHub والملفات - محسنة
+# دوال GitHub والملفات - محسنة نهائياً
 # -------------------------------
-def load_excel_fresh():
-    """قراءة الملف مباشرة من القرص - محدث دائماً"""
+
+def get_file_fingerprint():
+    """إنشاء بصمة فريدة للملف للتحقق من التغييرات"""
     if not os.path.exists(LOCAL_FILE):
+        return None
+    
+    try:
+        file_size = os.path.getsize(LOCAL_FILE)
+        file_mtime = os.path.getmtime(LOCAL_FILE)
+        return f"{file_size}_{file_mtime}"
+    except:
+        return None
+
+def load_excel_direct():
+    """قراءة الملف مباشرة بدون أي تخزين مؤقت"""
+    if not os.path.exists(LOCAL_FILE):
+        st.error("❌ الملف غير موجود محلياً")
         return {}
     
     try:
-        # إضافة طابع زمني فريد لمنع التخزين المؤقت
-        timestamp = int(time.time() * 1000)  # استخدام ملي ثانية لتجنب التكرار
-        
-        # قراءة الملف مع التحقق من التعديلات
-        file_mtime = os.path.getmtime(LOCAL_FILE)
-        cache_key = f"excel_data_{timestamp}_{file_mtime}"
-        
-        if cache_key in st.session_state:
-            return st.session_state[cache_key]
-        
-        # قراءة الملف مباشرة
+        # قراءة الملف مباشرة بدون تخزين مؤقت
         sheets = pd.read_excel(LOCAL_FILE, sheet_name=None)
+        
+        # تنظيف الأعمدة
         for name, df in sheets.items():
             df.columns = df.columns.str.strip()
+            # تنظيف البيانات من القيم NaN
+            df = df.fillna("")
         
-        # تخزين في الجلسة مع مفتاح فريد
-        st.session_state[cache_key] = sheets
-        st.session_state.last_loaded = timestamp
-        st.session_state.last_file_mtime = file_mtime
+        # حفظ البصمة الحالية
+        current_fingerprint = get_file_fingerprint()
+        st.session_state.current_file_fingerprint = current_fingerprint
         
         return sheets
     except Exception as e:
@@ -187,67 +189,57 @@ def load_excel_fresh():
         return {}
 
 def load_excel_for_edit():
-    """تحميل الملف للتحرير"""
-    if not os.path.exists(LOCAL_FILE):
-        return {}
-    try:
-        # استخدام طابع زمني مختلف للتحرير
-        timestamp = int(time.time() * 1000)
-        cache_key = f"edit_data_{timestamp}"
-        
-        if cache_key in st.session_state:
-            return st.session_state[cache_key]
-        
-        sheets = pd.read_excel(LOCAL_FILE, sheet_name=None, dtype=object)
-        for name, df in sheets.items():
-            df.columns = df.columns.str.strip()
-        
-        st.session_state[cache_key] = sheets
-        return sheets
-    except Exception as e:
-        st.error(f"❌ خطأ في قراءة الملف للتحرير: {e}")
-        return {}
+    """تحميل الملف للتحرير - بدون تخزين مؤقت"""
+    return load_excel_direct()
 
-def download_from_github():
-    """تحميل من GitHub مع تحسينات"""
+def download_from_github_force():
+    """تحميل إجباري من GitHub مع تجاوز كامل للتخزين المؤقت"""
     try:
-        # إنشاء طابع زمني فريد
+        # إنشاء URL فريد لمنع التخزين المؤقت
         timestamp = int(time.time() * 1000)
         url = f"{GITHUB_EXCEL_RAW_BASE}?t={timestamp}"
-        
+
         st.info("🔄 جاري تحميل أحدث نسخة من GitHub...")
         
-        # إضافة headers لمنع التخزين المؤقت
+        # إعداد headers لمنع التخزين المؤقت تماماً
         headers = {
-            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Cache-Control': 'no-cache, no-store, must-revalidate, max-age=0',
             'Pragma': 'no-cache',
-            'Expires': '0'
+            'Expires': '0',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
         
+        # طلب مع التحقق من التحديثات
         response = requests.get(url, timeout=30, headers=headers)
         response.raise_for_status()
         
-        # حفظ الملف مع التحقق من الكتابة
-        temp_file = f"{LOCAL_FILE}.tmp"
+        # حفظ في ملف مؤقت أولاً
+        temp_file = f"{LOCAL_FILE}.{timestamp}.tmp"
         with open(temp_file, "wb") as f:
             f.write(response.content)
         
-        # استبدال الملف القديم بالجديد
+        # التحقق من أن الملف تم تحميله بشكل صحيح
+        if os.path.getsize(temp_file) == 0:
+            st.error("❌ الملف الموجود فارغ")
+            os.remove(temp_file)
+            return False
+        
+        # استبدال الملف القديم
         if os.path.exists(LOCAL_FILE):
             os.remove(LOCAL_FILE)
         os.rename(temp_file, LOCAL_FILE)
-            
+        
+        # التحقق النهائي
         if os.path.exists(LOCAL_FILE):
             file_size = os.path.getsize(LOCAL_FILE)
             file_time = datetime.fromtimestamp(os.path.getmtime(LOCAL_FILE))
             
             st.success(f"✅ تم التحديث من GitHub بنجاح")
             st.success(f"📁 الحجم: {file_size} بايت")
-            st.success(f"🕒 وقت الملف: {file_time.strftime('%H:%M:%S')}")
+            st.success(f"🕒 وقت الملف: {file_time.strftime('%Y-%m-%d %H:%M:%S')}")
             
-            # مسح الذاكرة المؤقتة بعد التحديث
-            time.sleep(1)
-            clear_cache_and_reload()
+            # مسح كامل للذاكرة المؤقتة
+            clear_all_cache()
             return True
         else:
             st.error("❌ فشل في حفظ الملف المحلي")
@@ -257,101 +249,53 @@ def download_from_github():
         st.error(f"❌ فشل التحديث: {e}")
         return False
 
-def save_excel_locally(sheets_dict, commit_message="تحديث من التطبيق"):
-    """حفظ الملف محلياً فقط - بديل مبسط"""
+def save_excel_direct(sheets_dict, commit_message="تحديث من التطبيق"):
+    """حفظ مباشر للملف مع التحقق من الكتابة"""
     try:
-        # حفظ محلي
+        # حفظ مباشر بدون أي وساطة
         with pd.ExcelWriter(LOCAL_FILE, engine='openpyxl') as writer:
             for name, df in sheets_dict.items():
                 df.to_excel(writer, sheet_name=name, index=False)
         
-        # التحقق من الحفظ المحلي
+        # التحقق من الحفظ
         if not os.path.exists(LOCAL_FILE):
             st.error("❌ فشل الحفظ المحلي")
             return False
-            
+        
         file_size = os.path.getsize(LOCAL_FILE)
         file_time = datetime.fromtimestamp(os.path.getmtime(LOCAL_FILE))
         
         st.success(f"✅ تم الحفظ المحلي بنجاح")
         st.success(f"📁 الحجم: {file_size} بايت")
-        st.success(f"🕒 وقت الملف: {file_time.strftime('%H:%M:%S')}")
+        st.success(f"🕒 وقت الملف: {file_time.strftime('%Y-%m-%d %H:%M:%S')}")
         
-        # تحديث الذاكرة المؤقتة مباشرة بعد الحفظ
-        time.sleep(1)
-        clear_cache_and_reload()
+        # مسح الذاكرة المؤقتة مباشرة
+        clear_all_cache()
         return True
         
     except Exception as e:
         st.error(f"❌ خطأ في الحفظ: {e}")
         return False
 
-def save_to_github(sheets_dict, commit_message="تحديث من التطبيق"):
-    """حفظ محلي ثم رفع إلى GitHub"""
+def check_file_freshness():
+    """التحقق من حداثة الملف وعرض معلوماته"""
+    if not os.path.exists(LOCAL_FILE):
+        return "غير موجود", "0", "غير معروف"
+    
     try:
-        # 1. حفظ محلي أولاً
-        with pd.ExcelWriter(LOCAL_FILE, engine='openpyxl') as writer:
-            for name, df in sheets_dict.items():
-                df.to_excel(writer, sheet_name=name, index=False)
-        
-        # 2. التحقق من الحفظ المحلي
-        if not os.path.exists(LOCAL_FILE):
-            st.error("❌ فشل الحفظ المحلي")
-            return False
-            
-        file_size = os.path.getsize(LOCAL_FILE)
         file_time = datetime.fromtimestamp(os.path.getmtime(LOCAL_FILE))
+        file_size = os.path.getsize(LOCAL_FILE)
+        time_str = file_time.strftime("%Y-%m-%d %H:%M:%S")
+        size_str = f"{file_size:,} بايت"
         
-        st.success(f"✅ تم الحفظ المحلي بنجاح")
-        st.success(f"📁 الحجم: {file_size} بايت")
-        st.success(f"🕒 وقت الملف: {file_time.strftime('%H:%M:%S')}")
-        
-        # 3. تحديث الذاكرة المؤقتة مباشرة بعد الحفظ
-        time.sleep(1)
-        clear_cache_and_reload()
-        
-        # 4. رفع إلى GitHub
-        token = None
-        try:
-            token = st.secrets["github"]["token"]
-        except Exception:
-            token = None
-
-        if token and GITHUB_AVAILABLE:
-            try:
-                g = Github(token)
-                repo = g.get_repo(REPO_NAME)
-                with open(LOCAL_FILE, "rb") as f:
-                    content = f.read()
-                
-                try:
-                    contents = repo.get_contents(FILE_PATH, ref=BRANCH)
-                    repo.update_file(
-                        path=FILE_PATH, 
-                        message=commit_message, 
-                        content=content, 
-                        sha=contents.sha, 
-                        branch=BRANCH
-                    )
-                    st.success("✅ تم الرفع إلى GitHub بنجاح")
-                except Exception as e:
-                    st.error(f"❌ خطأ في الرفع: {e}")
-                    return False
-            except Exception as e:
-                st.error(f"❌ خطأ في الاتصال بـ GitHub: {e}")
-                return False
-        else:
-            st.info("🔒 تم الحفظ محلياً فقط (لا يوجد توكن GitHub)")
-        
-        return True
-        
-    except Exception as e:
-        st.error(f"❌ خطأ في الحفظ: {e}")
-        return False
+        return "محدث", size_str, time_str
+    except:
+        return "خطأ", "0", "غير معروف"
 
 # -------------------------------
 # واجهة المستخدم
 # -------------------------------
+
 def logout_action():
     """تسجيل الخروج"""
     state = load_state()
@@ -360,16 +304,17 @@ def logout_action():
         state[username]["active"] = False
         state[username].pop("login_time", None)
         save_state(state)
-    
+
     st.session_state.logged_in = False
     st.session_state.username = None
+    clear_all_cache()
     st.rerun()
 
 def login_ui():
     """واجهة تسجيل الدخول"""
     users = load_users()
     state = cleanup_sessions(load_state())
-    
+
     if "logged_in" not in st.session_state:
         st.session_state.logged_in = False
         st.session_state.username = None
@@ -418,12 +363,13 @@ def login_ui():
 # -------------------------------
 # أدوات الفحص والتنسيق
 # -------------------------------
+
 def normalize_name(s):
     """تطبيع الأسماء"""
     if s is None:
         return ""
     s = str(s).replace("\n", "+")
-    s = re.sub(r"[^0-9a-zA-Z\u0600-\u06FF\+\s_/.-]", " ", s)
+    s = re.sub(r"[^0-9a-zA-Z\u0600-\u06FF+\s_/.-]", " ", s)
     s = re.sub(r"\s+", " ", s).strip().lower()
     return s
 
@@ -455,9 +401,9 @@ def style_table(row):
 
 def check_machine_status_realtime(card_num, current_tons):
     """فحص مباشر - يقرأ الملف في اللحظة نفسها"""
-    
-    with st.spinner("🔄 جاري تحميل أحدث البيانات..."):
-        all_sheets = load_excel_fresh()
+
+    with st.spinner("🔄 جاري تحميل أحدث البيانات مباشرة من الملف..."):
+        all_sheets = load_excel_direct()
     
     if not all_sheets:
         st.error("❌ لا يمكن تحميل الملف")
@@ -477,7 +423,10 @@ def check_machine_status_realtime(card_num, current_tons):
     card_df = all_sheets[card_sheet_name]
 
     load_time = datetime.now().strftime("%H:%M:%S")
+    file_status, file_size, file_time = check_file_freshness()
+    
     st.info(f"🕒 وقت تحميل البيانات: {load_time}")
+    st.info(f"📁 حالة الملف: {file_status} | الحجم: {file_size} | التعديل: {file_time}")
 
     st.subheader("⚙ نطاق العرض")
     view_option = st.radio(
@@ -587,6 +536,7 @@ def check_machine_status_realtime(card_num, current_tons):
 # -------------------------------
 # دوال مساعدة للتعديل
 # -------------------------------
+
 def find_range_columns(df):
     """البحث عن أعمدة المدى"""
     min_col, max_col, card_col = None, None, None
@@ -662,7 +612,7 @@ def safe_date_analysis(df, date_column='Date'):
     """تحليل آمن للتواريخ"""
     if date_column not in df.columns:
         return "-", "-"
-    
+
     try:
         # تحويل التواريخ بشكل آمن
         dates = pd.to_datetime(df[date_column], errors='coerce')
@@ -680,6 +630,7 @@ def safe_date_analysis(df, date_column='Date'):
 # -------------------------------
 # الواجهة الرئيسية
 # -------------------------------
+
 st.set_page_config(page_title="CMMS - Bail Yarn", layout="wide", page_icon="🏭")
 
 with st.sidebar:
@@ -703,27 +654,28 @@ with st.sidebar:
     col1, col2 = st.columns(2)
     with col1:
         if st.button("📥 تحميل من GitHub", help="تحميل أحدث نسخة من GitHub", use_container_width=True):
-            with st.spinner("جاري التحميل..."):
-                if download_from_github():
+            with st.spinner("جاري التحميل المباشر من GitHub..."):
+                if download_from_github_force():
                     st.success("✅ تم التحميل بنجاح")
 
     with col2:
-        if st.button("🔄 تحديث قسري", help="تحديث قسري للبيانات", use_container_width=True):
-            with st.spinner("جاري التحديث..."):
-                force_refresh()
+        if st.button("🔄 تحديث كامل", help="تحديث كامل للبيانات والذاكرة", use_container_width=True):
+            with st.spinner("جاري التحديث الكامل..."):
+                force_complete_refresh()
     
     st.markdown("---")
     st.subheader("📊 حالة النظام")
     
-    if os.path.exists(LOCAL_FILE):
-        file_time = datetime.fromtimestamp(os.path.getmtime(LOCAL_FILE))
-        file_size = os.path.getsize(LOCAL_FILE)
-        st.success(f"📁 الملف: {file_time.strftime('%H:%M:%S')}")
-        st.info(f"📊 الحجم: {file_size:,} بايت")
+    file_status, file_size, file_time = check_file_freshness()
+    
+    if file_status != "غير موجود":
+        st.success(f"📁 حالة الملف: {file_status}")
+        st.info(f"📊 الحجم: {file_size}")
+        st.info(f"🕒 آخر تعديل: {file_time}")
         
         # معلومات الملف
         try:
-            sheets = load_excel_fresh()
+            sheets = load_excel_direct()
             if sheets:
                 st.info(f"📋 عدد الشيتات: {len(sheets)}")
                 total_rows = sum(len(df) for df in sheets.values())
@@ -754,24 +706,25 @@ with st.sidebar:
 
 # التبويبات الرئيسية
 st.title("🏭 CMMS - Bail Yarn")
-st.markdown("نظام إدارة صيانة الماكينات - الإصدار 2.0")
+st.markdown("نظام إدارة صيانة الماكينات - الإصدار 2.0 (محل مشكلة التخزين المؤقت)")
 
 tabs = st.tabs(["📊 عرض وفحص الماكينات", "🛠 تعديل وإدارة البيانات", "⚙ إدارة المستخدمين", "📈 التقارير والإحصائيات"])
 
 # -------------------------------
 # Tab 1: عرض وفحص الماكينات
 # -------------------------------
+
 with tabs[0]:
     st.header("📊 عرض وفحص الماكينات")
-    
+
     # معلومات التحديث
-    if os.path.exists(LOCAL_FILE):
-        file_time = datetime.fromtimestamp(os.path.getmtime(LOCAL_FILE))
-        st.info(f"🕒 آخر تحديث للملف: {file_time.strftime('%Y-%m-%d %H:%M:%S')}")
-    
-    if not os.path.exists(LOCAL_FILE):
-        st.error("❌ الملف غير موجود. اضغط 'تحميل من GitHub' في الشريط الجانبي.")
+    file_status, file_size, file_time = check_file_freshness()
+    if file_status != "غير موجود":
+        st.info(f"🕒 آخر تحديث للملف: {file_time}")
     else:
+        st.error("❌ الملف غير موجود. اضغط 'تحميل من GitHub' في الشريط الجانبي.")
+        
+    if file_status != "غير موجود":
         col1, col2 = st.columns(2)
         with col1:
             card_num = st.number_input("رقم الماكينة:", min_value=1, step=1, key="card_num_main")
@@ -784,19 +737,21 @@ with tabs[0]:
 # -------------------------------
 # Tab 2: تعديل وإدارة البيانات
 # -------------------------------
+
 with tabs[1]:
     st.header("🛠 تعديل وإدارة البيانات")
-    
+
     # معلومات التحديث
-    if os.path.exists(LOCAL_FILE):
-        file_time = datetime.fromtimestamp(os.path.getmtime(LOCAL_FILE))
-        st.info(f"🕒 آخر تحديث للملف: {file_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    file_status, file_size, file_time = check_file_freshness()
+    if file_status != "غير موجود":
+        st.info(f"🕒 آخر تحديث للملف: {file_time}")
+    else:
+        st.error("❌ الملف غير موجود. اضغط 'تحميل من GitHub' في الشريط الجانبي.")
+        st.stop()
     
     username = st.session_state.get("username")
-    token_exists = bool(st.secrets.get("github", {}).get("token", None))
-    can_push = (username == "admin") or (token_exists and GITHUB_AVAILABLE)
-
-    with st.spinner("🔄 جاري تحميل البيانات..."):
+    
+    with st.spinner("🔄 جاري تحميل البيانات مباشرة من الملف..."):
         sheets_data = load_excel_for_edit()
     
     if not sheets_data:
@@ -818,7 +773,7 @@ with tabs[1]:
 
                 if st.button("💾 حفظ التعديلات", key=f"save_{sheet_name}", type="primary", use_container_width=True):
                     sheets_data[sheet_name] = edited_df
-                    if save_excel_locally(sheets_data, f"تعديل {sheet_name} بواسطة {username}"):
+                    if save_excel_direct(sheets_data, f"تعديل {sheet_name} بواسطة {username}"):
                         st.balloons()
                         st.success("✅ تم الحفظ بنجاح! انتقل إلى تبويب الفحص لرؤية التغييرات.")
 
@@ -851,7 +806,7 @@ with tabs[1]:
                         df_new = pd.concat([df_top, new_row_df, df_bottom], ignore_index=True)
                         sheets_data[sheet_name_add] = df_new
                         
-                        if save_excel_locally(sheets_data, f"إضافة صف في {sheet_name_add} بواسطة {username}"):
+                        if save_excel_direct(sheets_data, f"إضافة صف في {sheet_name_add} بواسطة {username}"):
                             st.balloons()
                             st.success("✅ تم الإضافة بنجاح! انتقل إلى تبويب الفحص لرؤية التغييرات.")
 
@@ -890,7 +845,7 @@ with tabs[1]:
                             df_col[new_col_name] = default_value
                             sheets_data[sheet_name_col] = df_col
                             
-                            if save_excel_locally(sheets_data, f"إضافة عمود '{new_col_name}' في {sheet_name_col} بواسطة {username}"):
+                            if save_excel_direct(sheets_data, f"إضافة عمود '{new_col_name}' في {sheet_name_col} بواسطة {username}"):
                                 st.balloons()
                                 st.success("✅ تم إضافة العمود بنجاح! انتقل إلى تبويب الفحص لرؤية التغييرات.")
                     else:
@@ -924,26 +879,27 @@ with tabs[1]:
                                 preview_df = df_del.iloc[rows_list]
                                 st.dataframe(preview_df, use_container_width=True)
                             
-                            confirm_delete = st.checkbox("✅ أؤكد أني أريد حذف هذه الصفوف بشكل نهائي")
-                            
-                            if st.button("🗑 تنفيذ الحذف", key=f"delete_rows_{sheet_name_del}", type="primary", use_container_width=True):
-                                if not confirm_delete:
-                                    st.warning("⚠ برجاء تأكيد الحذف أولاً")
-                                else:
-                                    df_new = df_del.drop(rows_list).reset_index(drop=True)
-                                    sheets_data[sheet_name_del] = df_new
-                                    
-                                    if save_excel_locally(sheets_data, f"حذف {len(rows_list)} صفوف من {sheet_name_del} بواسطة {username}"):
-                                        st.balloons()
-                                        st.success(f"✅ تم حذف {len(rows_list)} صفوف بنجاح!")
-                        else:
-                            st.warning("⚠ لم يتم العثور على صفوف صحيحة.")
+                        confirm_delete = st.checkbox("✅ أؤكد أني أريد حذف هذه الصفوف بشكل نهائي")
+                        
+                        if st.button("🗑 تنفيذ الحذف", key=f"delete_rows_{sheet_name_del}", type="primary", use_container_width=True):
+                            if not confirm_delete:
+                                st.warning("⚠ برجاء تأكيد الحذف أولاً")
+                            else:
+                                df_new = df_del.drop(rows_list).reset_index(drop=True)
+                                sheets_data[sheet_name_del] = df_new
+                                
+                                if save_excel_direct(sheets_data, f"حذف {len(rows_list)} صفوف من {sheet_name_del} بواسطة {username}"):
+                                    st.balloons()
+                                    st.success(f"✅ تم حذف {len(rows_list)} صفوف بنجاح!")
+                    else:
+                        st.warning("⚠ لم يتم العثور على صفوف صحيحة.")
                     except Exception as e:
                         st.error(f"❌ حدث خطأ أثناء معالجة البيانات: {e}")
 
 # -------------------------------
 # Tab 3: إدارة المستخدمين
 # -------------------------------
+
 with tabs[2]:
     st.header("⚙ إدارة المستخدمين")
     users = load_users()
@@ -1026,157 +982,160 @@ with tabs[2]:
 # -------------------------------
 # Tab 4: التقارير والإحصائيات
 # -------------------------------
+
 with tabs[3]:
     st.header("📈 التقارير والإحصائيات")
-    
+
     # معلومات التحديث
-    if os.path.exists(LOCAL_FILE):
-        file_time = datetime.fromtimestamp(os.path.getmtime(LOCAL_FILE))
-        st.info(f"🕒 آخر تحديث للملف: {file_time.strftime('%Y-%m-%d %H:%M:%S')}")
-    
-    if not os.path.exists(LOCAL_FILE):
-        st.warning("⚠ لا توجد بيانات لعرض التقارير")
+    file_status, file_size, file_time = check_file_freshness()
+    if file_status != "غير موجود":
+        st.info(f"🕒 آخر تحديث للملف: {file_time}")
     else:
-        with st.spinner("🔄 جاري تحميل البيانات..."):
-            sheets_data = load_excel_fresh()
+        st.warning("⚠ لا توجد بيانات لعرض التقارير")
+        st.stop()
+    
+    with st.spinner("🔄 جاري تحميل البيانات مباشرة من الملف..."):
+        sheets_data = load_excel_direct()
+    
+    if not sheets_data:
+        st.error("❌ لا يمكن تحميل البيانات من الملف")
+    else:
+        col1, col2, col3 = st.columns(3)
         
-        if not sheets_data:
-            st.error("❌ لا يمكن تحميل البيانات من الملف")
-        else:
-            col1, col2, col3 = st.columns(3)
+        with col1:
+            total_sheets = len(sheets_data)
+            st.metric("عدد الشيتات", total_sheets)
+        
+        with col2:
+            total_rows = sum(len(df) for df in sheets_data.values())
+            st.metric("إجمالي الصفوف", f"{total_rows:,}")
+        
+        with col3:
+            card_sheets = [name for name in sheets_data.keys() if name.startswith('Card')]
+            st.metric("شيتات الماكينات", len(card_sheets))
+        
+        st.markdown("---")
+        
+        # تحليل شيتات الماكينات
+        st.subheader("📋 تحليل شيتات الماكينات")
+        
+        if card_sheets:
+            machine_data = []
             
+            for sheet_name in card_sheets:
+                df = sheets_data[sheet_name]
+                
+                # استخدام الدالة المحسنة لتحليل التواريخ
+                first_date, last_date = safe_date_analysis(df, 'Date')
+                
+                machine_data.append({
+                    "الشيت": sheet_name,
+                    "عدد الصفوف": len(df),
+                    "عدد الأعمدة": len(df.columns),
+                    "أول تاريخ": first_date,
+                    "آخر تاريخ": last_date
+                })
+            
+            if machine_data:
+                machine_df = pd.DataFrame(machine_data)
+                st.dataframe(machine_df, use_container_width=True)
+            else:
+                st.info("📭 لا توجد بيانات لشيتات الماكينات")
+        else:
+            st.info("📭 لا توجد شيتات ماكينات (Card) للتحليل")
+        
+        # ServicePlan analysis
+        st.subheader("📊 تحليل خطط الصيانة")
+        if "ServicePlan" in sheets_data:
+            service_df = sheets_data["ServicePlan"]
+            
+            col1, col2 = st.columns(2)
             with col1:
-                total_sheets = len(sheets_data)
-                st.metric("عدد الشيتات", total_sheets)
+                st.write("*ملخص خطط الصيانة:*")
+                st.write(f"- عدد الشرائح: {len(service_df)}")
+                
+                # حساب نطاق الأطنان بشكل آمن
+                try:
+                    if 'Min_Tones' in service_df.columns and 'Max_Tones' in service_df.columns:
+                        min_tones = service_df['Min_Tones'].min()
+                        max_tones = service_df['Max_Tones'].max()
+                        st.write(f"- نطاق الأطنان: {min_tones} إلى {max_tones}")
+                    else:
+                        st.write("- نطاق الأطنان: غير متوفر")
+                except Exception as e:
+                    st.write(f"- نطاق الأطنان: خطأ في الحساب - {e}")
             
             with col2:
-                total_rows = sum(len(df) for df in sheets_data.values())
-                st.metric("إجمالي الصفوف", f"{total_rows:,}")
-            
-            with col3:
-                card_sheets = [name for name in sheets_data.keys() if name.startswith('Card')]
-                st.metric("شيتات الماكينات", len(card_sheets))
-            
-            st.markdown("---")
-            
-            # تحليل شيتات الماكينات
-            st.subheader("📋 تحليل شيتات الماكينات")
-            
-            if card_sheets:
-                machine_data = []
-                
-                for sheet_name in card_sheets:
-                    df = sheets_data[sheet_name]
-                    
-                    # استخدام الدالة المحسنة لتحليل التواريخ
-                    first_date, last_date = safe_date_analysis(df, 'Date')
-                    
-                    machine_data.append({
-                        "الشيت": sheet_name,
-                        "عدد الصفوف": len(df),
-                        "عدد الأعمدة": len(df.columns),
-                        "أول تاريخ": first_date,
-                        "آخر تاريخ": last_date
-                    })
-                
-                if machine_data:
-                    machine_df = pd.DataFrame(machine_data)
-                    st.dataframe(machine_df, use_container_width=True)
-                else:
-                    st.info("📭 لا توجد بيانات لشيتات الماكينات")
-            else:
-                st.info("📭 لا توجد شيتات ماكينات (Card) للتحليل")
-            
-            # ServicePlan analysis
-            st.subheader("📊 تحليل خطط الصيانة")
-            if "ServicePlan" in sheets_data:
-                service_df = sheets_data["ServicePlan"]
-                
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.write("*ملخص خطط الصيانة:*")
-                    st.write(f"- عدد الشرائح: {len(service_df)}")
-                    
-                    # حساب نطاق الأطنان بشكل آمن
+                if 'Service' in service_df.columns:
                     try:
-                        if 'Min_Tones' in service_df.columns and 'Max_Tones' in service_df.columns:
-                            min_tones = service_df['Min_Tones'].min()
-                            max_tones = service_df['Max_Tones'].max()
-                            st.write(f"- نطاق الأطنان: {min_tones} إلى {max_tones}")
+                        # تحويل القيم إلى نص قبل التقسيم
+                        services = service_df['Service'].fillna('').astype(str)
+                        services_split = services.str.split('[+,]').explode().str.strip()
+                        services_split = services_split[services_split != '']
+                        
+                        if not services_split.empty:
+                            service_counts = services_split.value_counts()
+                            st.write("*الخدمات الأكثر تكراراً:*")
+                            for service, count in service_counts.head(5).items():
+                                st.write(f"- {service}: {count} مرة")
                         else:
-                            st.write("- نطاق الأطنان: غير متوفر")
+                            st.write("- لا توجد خدمات للتحليل")
                     except Exception as e:
-                        st.write(f"- نطاق الأطنان: خطأ في الحساب - {e}")
-                
-                with col2:
-                    if 'Service' in service_df.columns:
-                        try:
-                            # تحويل القيم إلى نص قبل التقسيم
-                            services = service_df['Service'].fillna('').astype(str)
-                            services_split = services.str.split('[+,]').explode().str.strip()
-                            services_split = services_split[services_split != '']
-                            
-                            if not services_split.empty:
-                                service_counts = services_split.value_counts()
-                                st.write("*الخدمات الأكثر تكراراً:*")
-                                for service, count in service_counts.head(5).items():
-                                    st.write(f"- {service}: {count} مرة")
-                            else:
-                                st.write("- لا توجد خدمات للتحليل")
-                        except Exception as e:
-                            st.write(f"- تحليل الخدمات: خطأ - {e}")
-                    else:
-                        st.write("- تحليل الخدمات: عمود الخدمات غير موجود")
-            else:
-                st.info("📭 لا يوجد شيت ServicePlan للتحليل")
+                        st.write(f"- تحليل الخدمات: خطأ - {e}")
+                else:
+                    st.write("- تحليل الخدمات: عمود الخدمات غير موجود")
+        else:
+            st.info("📭 لا يوجد شيت ServicePlan للتحليل")
 
 # -------------------------------
 # تذييل الصفحة والمساعدة
 # -------------------------------
+
 st.sidebar.markdown("---")
 with st.sidebar.expander("ℹ المساعدة والدعم"):
     st.markdown("""
-    *📖 دليل الاستخدام السريع:*
-    
-    🔍 *فحص الماكينات:*
-    - أدخل رقم الماكينة والأطنان
-    - اضغط "فحص الحالة الآن"
-    - اختر نطاق العرض المناسب
-    
-    ✏ *تعديل البيانات:*
-    - اختر الشيت المطلوب
-    - عدل مباشرة في الجدول
-    - احفظ التغييرات
-    
-    👥 *إدارة المستخدمين:*
-    - للمسؤولين فقط
-    - إضافة/حذف المستخدمين
-    - تحديد الصلاحيات
-    
-    🔄 *المزامنة:*
-    - استخدم "تحميل من GitHub" لأحدث نسخة
-    - استخدم "تحديث قسري" إذا كانت هناك مشاكل
-    - البيانات تحفظ تلقائياً
-    
-    *📞 الدعم الفني:*
-    - في حالة وجود مشاكل او محتاج دعم فني مقترح يرجي تواصل عبر واتساب (01274424062)
-    """)
+📖 دليل الاستخدام السريع:
+
+🔍 *فحص الماكينات:*  
+- أدخل رقم الماكينة والأطنان  
+- اضغط "فحص الحالة الآن"  
+- اختر نطاق العرض المناسب  
+
+✏ *تعديل البيانات:*  
+- اختر الشيت المطلوب  
+- عدل مباشرة في الجدول  
+- احفظ التغييرات  
+
+👥 *إدارة المستخدمين:*  
+- للمسؤولين فقط  
+- إضافة/حذف المستخدمين  
+- تحديد الصلاحيات  
+
+🔄 *المزامنة - مهم جداً:*  
+- استخدم *"تحميل من GitHub"* لأحدث نسخة  
+- استخدم *"تحديث كامل"* إذا كانت هناك مشاكل في التخزين المؤقت  
+- البيانات تحفظ تلقائياً محلياً  
+
+*📞 الدعم الفني:*  
+- في حالة وجود مشاكل او محتاج دعم فني مقترح يرجي تواصل عبر واتساب (01274424062)  
+""")
 
 st.markdown("---")
 footer = """
-<div style="text-align: center; color: gray; padding: 20px;">
-    <p><strong>نظام إدارة صيانة الماكينات (CMMS) - Bail Yarn</strong></p>
-    <p>الإصدار 2.0 | تم التطوير باستخدام Streamlit | © 2024</p>
-</div>
-"""
+<div style="text-align: center; color: gray; padding: 20px;">  
+    <p><strong>نظام إدارة صيانة الماكينات (CMMS) - Bail Yarn</strong></p>  
+    <p>الإصدار 2.0 - محسّن نهائياً | تم التطوير باستخدام Streamlit | © 2024</p>  
+</div>  
+"""  
 st.markdown(footer, unsafe_allow_html=True)
 
 # -------------------------------
 # التهيئة الأولية
 # -------------------------------
+
 if not os.path.exists(LOCAL_FILE):
     st.sidebar.info("🔄 جاري التحميل الأولي...")
-    if download_from_github():
+    if download_from_github_force():
         st.sidebar.success("✅ تم التهيئة بنجاح")
         st.rerun()
     else:
