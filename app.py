@@ -4,34 +4,104 @@ import json
 import os
 import io
 import requests
-import shutil
 import re
+import time
 from datetime import datetime, timedelta
+from base64 import b64decode
+
+# محاولة استيراد PyGithub
+try:
+    from github import Github
+    GITHUB_AVAILABLE = True
+except Exception:
+    GITHUB_AVAILABLE = False
 
 # ===============================
-# 🔐 إدارة المستخدمين والجلسات
+# إعدادات عامة
 # ===============================
 USERS_FILE = "users.json"
 STATE_FILE = "state.json"
-SESSION_DURATION = timedelta(minutes=10)  # مدة الجلسة 10 دقائق
-MAX_ACTIVE_USERS = 2  # أقصى عدد مستخدمين مسموح
+SESSION_DURATION = timedelta(minutes=30)
+MAX_ACTIVE_USERS = 5
+
+# إعدادات GitHub
+REPO_NAME = "mahmedabdallh123/NEW-CMMS"
+BRANCH = "main"
+FILE_PATH = "Machine_Service_Lookup.xlsx"
+LOCAL_FILE = "Machine_Service_Lookup.xlsx"
+GITHUB_EXCEL_RAW_BASE = f"https://raw.githubusercontent.com/{REPO_NAME}/{BRANCH}/{FILE_PATH}"
 
 # -------------------------------
-# 🧩 دوال مساعدة
+# دوال مسح الذاكرة المؤقتة - محسنة
+# -------------------------------
+def clear_cache_and_reload():
+    """مسح الذاكرة المؤقتة وإعادة تحميل البيانات"""
+    try:
+        # مسح ذاكرة التخزين المؤقت لـ pandas
+        if hasattr(pd, 'read_excel'):
+            # إعادة تحميل pandas module
+            import importlib
+            importlib.reload(pd)
+        
+        # إعادة تعيين حالة الجلسة
+        keys_to_clear = ['sheets_data', 'excel_data', 'last_loaded', 'cached_sheets']
+        for key in list(st.session_state.keys()):
+            if key in keys_to_clear:
+                del st.session_state[key]
+        
+        # إضافة تأخير بسيط لضمان مسح الذاكرة المؤقتة
+        time.sleep(0.5)
+        
+        st.success("✅ تم تحديث البيانات بنجاح")
+        time.sleep(1)
+        st.rerun()
+        return True
+    except Exception as e:
+        st.error(f"❌ خطأ في مسح الذاكرة المؤقتة: {e}")
+        return False
+
+def force_refresh():
+    """تحديث قسري للبيانات"""
+    try:
+        # مسح جميع المتغيرات المؤقتة
+        import gc
+        gc.collect()
+        
+        # إعادة تعيين جلسة streamlit
+        for key in list(st.session_state.keys()):
+            if key not in ['logged_in', 'username']:
+                del st.session_state[key]
+        
+        st.success("🔄 تم التحديث القسري للبيانات")
+        time.sleep(2)
+        st.rerun()
+    except Exception as e:
+        st.error(f"❌ خطأ في التحديث القسري: {e}")
+
+# -------------------------------
+# دوال الملفات والمستخدمين
 # -------------------------------
 def load_users():
+    """تحميل بيانات المستخدمين"""
+    if not os.path.exists(USERS_FILE):
+        default = {"admin": {"password": "admin", "role": "admin"}}
+        with open(USERS_FILE, "w", encoding="utf-8") as f:
+            json.dump(default, f, indent=4, ensure_ascii=False)
+        return default
     try:
         with open(USERS_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except:
-        st.error("❌ خطأ في ملف users.json")
+    except Exception as e:
+        st.error(f"❌ خطأ في ملف users.json: {e}")
         st.stop()
 
 def save_users(users):
+    """حفظ بيانات المستخدمين"""
     with open(USERS_FILE, "w", encoding="utf-8") as f:
         json.dump(users, f, indent=4, ensure_ascii=False)
 
 def load_state():
+    """تحميل حالة الجلسات"""
     if not os.path.exists(STATE_FILE):
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             json.dump({}, f, indent=4, ensure_ascii=False)
@@ -39,17 +109,19 @@ def load_state():
     try:
         with open(STATE_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
-    except:
+    except Exception:
         return {}
 
 def save_state(state):
+    """حفظ حالة الجلسات"""
     with open(STATE_FILE, "w", encoding="utf-8") as f:
         json.dump(state, f, indent=4, ensure_ascii=False)
 
 def cleanup_sessions(state):
+    """تنظيف الجلسات المنتهية"""
     now = datetime.now()
     changed = False
-    for user, info in state.items():
+    for user, info in list(state.items()):
         if info.get("active") and "login_time" in info:
             try:
                 login_time = datetime.fromisoformat(info["login_time"])
@@ -57,7 +129,7 @@ def cleanup_sessions(state):
                     info["active"] = False
                     info.pop("login_time", None)
                     changed = True
-            except:
+            except Exception:
                 info["active"] = False
                 changed = True
     if changed:
@@ -65,6 +137,7 @@ def cleanup_sessions(state):
     return state
 
 def remaining_time(state, username):
+    """حساب الوقت المتبقي للجلسة"""
     if not username or username not in state:
         return None
     info = state.get(username)
@@ -80,29 +153,229 @@ def remaining_time(state, username):
         return None
 
 # -------------------------------
-# 🚪 تسجيل الخروج
+# دوال GitHub والملفات - محسنة
+# -------------------------------
+def load_excel_fresh():
+    """قراءة الملف مباشرة من القرص - محدث دائماً"""
+    if not os.path.exists(LOCAL_FILE):
+        return {}
+    
+    try:
+        # إضافة طابع زمني فريد لمنع التخزين المؤقت
+        timestamp = int(time.time() * 1000)  # استخدام ملي ثانية لتجنب التكرار
+        
+        # قراءة الملف مع التحقق من التعديلات
+        file_mtime = os.path.getmtime(LOCAL_FILE)
+        cache_key = f"excel_data_{timestamp}_{file_mtime}"
+        
+        if cache_key in st.session_state:
+            return st.session_state[cache_key]
+        
+        # قراءة الملف مباشرة
+        sheets = pd.read_excel(LOCAL_FILE, sheet_name=None)
+        for name, df in sheets.items():
+            df.columns = df.columns.str.strip()
+        
+        # تخزين في الجلسة مع مفتاح فريد
+        st.session_state[cache_key] = sheets
+        st.session_state.last_loaded = timestamp
+        st.session_state.last_file_mtime = file_mtime
+        
+        return sheets
+    except Exception as e:
+        st.error(f"❌ خطأ في قراءة الملف: {e}")
+        return {}
+
+def load_excel_for_edit():
+    """تحميل الملف للتحرير"""
+    if not os.path.exists(LOCAL_FILE):
+        return {}
+    try:
+        # استخدام طابع زمني مختلف للتحرير
+        timestamp = int(time.time() * 1000)
+        cache_key = f"edit_data_{timestamp}"
+        
+        if cache_key in st.session_state:
+            return st.session_state[cache_key]
+        
+        sheets = pd.read_excel(LOCAL_FILE, sheet_name=None, dtype=object)
+        for name, df in sheets.items():
+            df.columns = df.columns.str.strip()
+        
+        st.session_state[cache_key] = sheets
+        return sheets
+    except Exception as e:
+        st.error(f"❌ خطأ في قراءة الملف للتحرير: {e}")
+        return {}
+
+def download_from_github():
+    """تحميل من GitHub مع تحسينات"""
+    try:
+        # إنشاء طابع زمني فريد
+        timestamp = int(time.time() * 1000)
+        url = f"{GITHUB_EXCEL_RAW_BASE}?t={timestamp}"
+        
+        st.info("🔄 جاري تحميل أحدث نسخة من GitHub...")
+        
+        # إضافة headers لمنع التخزين المؤقت
+        headers = {
+            'Cache-Control': 'no-cache, no-store, must-revalidate',
+            'Pragma': 'no-cache',
+            'Expires': '0'
+        }
+        
+        response = requests.get(url, timeout=30, headers=headers)
+        response.raise_for_status()
+        
+        # حفظ الملف مع التحقق من الكتابة
+        temp_file = f"{LOCAL_FILE}.tmp"
+        with open(temp_file, "wb") as f:
+            f.write(response.content)
+        
+        # استبدال الملف القديم بالجديد
+        if os.path.exists(LOCAL_FILE):
+            os.remove(LOCAL_FILE)
+        os.rename(temp_file, LOCAL_FILE)
+            
+        if os.path.exists(LOCAL_FILE):
+            file_size = os.path.getsize(LOCAL_FILE)
+            file_time = datetime.fromtimestamp(os.path.getmtime(LOCAL_FILE))
+            
+            st.success(f"✅ تم التحديث من GitHub بنجاح")
+            st.success(f"📁 الحجم: {file_size} بايت")
+            st.success(f"🕒 وقت الملف: {file_time.strftime('%H:%M:%S')}")
+            
+            # مسح الذاكرة المؤقتة بعد التحديث
+            time.sleep(1)
+            clear_cache_and_reload()
+            return True
+        else:
+            st.error("❌ فشل في حفظ الملف المحلي")
+            return False
+            
+    except Exception as e:
+        st.error(f"❌ فشل التحديث: {e}")
+        return False
+
+def save_excel_locally(sheets_dict, commit_message="تحديث من التطبيق"):
+    """حفظ الملف محلياً فقط - بديل مبسط"""
+    try:
+        # حفظ محلي
+        with pd.ExcelWriter(LOCAL_FILE, engine='openpyxl') as writer:
+            for name, df in sheets_dict.items():
+                df.to_excel(writer, sheet_name=name, index=False)
+        
+        # التحقق من الحفظ المحلي
+        if not os.path.exists(LOCAL_FILE):
+            st.error("❌ فشل الحفظ المحلي")
+            return False
+            
+        file_size = os.path.getsize(LOCAL_FILE)
+        file_time = datetime.fromtimestamp(os.path.getmtime(LOCAL_FILE))
+        
+        st.success(f"✅ تم الحفظ المحلي بنجاح")
+        st.success(f"📁 الحجم: {file_size} بايت")
+        st.success(f"🕒 وقت الملف: {file_time.strftime('%H:%M:%S')}")
+        
+        # تحديث الذاكرة المؤقتة مباشرة بعد الحفظ
+        time.sleep(1)
+        clear_cache_and_reload()
+        return True
+        
+    except Exception as e:
+        st.error(f"❌ خطأ في الحفظ: {e}")
+        return False
+
+def save_to_github(sheets_dict, commit_message="تحديث من التطبيق"):
+    """حفظ محلي ثم رفع إلى GitHub"""
+    try:
+        # 1. حفظ محلي أولاً
+        with pd.ExcelWriter(LOCAL_FILE, engine='openpyxl') as writer:
+            for name, df in sheets_dict.items():
+                df.to_excel(writer, sheet_name=name, index=False)
+        
+        # 2. التحقق من الحفظ المحلي
+        if not os.path.exists(LOCAL_FILE):
+            st.error("❌ فشل الحفظ المحلي")
+            return False
+            
+        file_size = os.path.getsize(LOCAL_FILE)
+        file_time = datetime.fromtimestamp(os.path.getmtime(LOCAL_FILE))
+        
+        st.success(f"✅ تم الحفظ المحلي بنجاح")
+        st.success(f"📁 الحجم: {file_size} بايت")
+        st.success(f"🕒 وقت الملف: {file_time.strftime('%H:%M:%S')}")
+        
+        # 3. تحديث الذاكرة المؤقتة مباشرة بعد الحفظ
+        time.sleep(1)
+        clear_cache_and_reload()
+        
+        # 4. رفع إلى GitHub
+        token = None
+        try:
+            token = st.secrets["github"]["token"]
+        except Exception:
+            token = None
+
+        if token and GITHUB_AVAILABLE:
+            try:
+                g = Github(token)
+                repo = g.get_repo(REPO_NAME)
+                with open(LOCAL_FILE, "rb") as f:
+                    content = f.read()
+                
+                try:
+                    contents = repo.get_contents(FILE_PATH, ref=BRANCH)
+                    repo.update_file(
+                        path=FILE_PATH, 
+                        message=commit_message, 
+                        content=content, 
+                        sha=contents.sha, 
+                        branch=BRANCH
+                    )
+                    st.success("✅ تم الرفع إلى GitHub بنجاح")
+                except Exception as e:
+                    st.error(f"❌ خطأ في الرفع: {e}")
+                    return False
+            except Exception as e:
+                st.error(f"❌ خطأ في الاتصال بـ GitHub: {e}")
+                return False
+        else:
+            st.info("🔒 تم الحفظ محلياً فقط (لا يوجد توكن GitHub)")
+        
+        return True
+        
+    except Exception as e:
+        st.error(f"❌ خطأ في الحفظ: {e}")
+        return False
+
+# -------------------------------
+# واجهة المستخدم
 # -------------------------------
 def logout_action():
+    """تسجيل الخروج"""
     state = load_state()
     username = st.session_state.get("username")
     if username and username in state:
         state[username]["active"] = False
         state[username].pop("login_time", None)
         save_state(state)
-    st.session_state.clear()
+    
+    st.session_state.logged_in = False
+    st.session_state.username = None
     st.rerun()
 
-# -------------------------------
-# 🧠 واجهة تسجيل الدخول
-# -------------------------------
 def login_ui():
+    """واجهة تسجيل الدخول"""
     users = load_users()
     state = cleanup_sessions(load_state())
+    
     if "logged_in" not in st.session_state:
         st.session_state.logged_in = False
         st.session_state.username = None
 
-    st.title("🔐 تسجيل الدخول - Bail Yarn")
+    st.title("🔐 تسجيل الدخول - Bail Yarn (CMMS)")
+
     username_input = st.selectbox("👤 اختر المستخدم", list(users.keys()))
     password = st.text_input("🔑 كلمة المرور", type="password")
 
@@ -111,14 +384,12 @@ def login_ui():
     st.caption(f"🔒 المستخدمون النشطون الآن: {active_count} / {MAX_ACTIVE_USERS}")
 
     if not st.session_state.logged_in:
-        if st.button("تسجيل الدخول"):
+        if st.button("تسجيل الدخول", type="primary"):
             if username_input in users and users[username_input]["password"] == password:
-                if username_input == "admin":
-                    pass
-                elif username_input in active_users:
+                if username_input != "admin" and username_input in active_users:
                     st.warning("⚠ هذا المستخدم مسجل دخول بالفعل.")
                     return False
-                elif active_count >= MAX_ACTIVE_USERS:
+                if active_count >= MAX_ACTIVE_USERS and username_input != "admin":
                     st.error("🚫 الحد الأقصى للمستخدمين المتصلين حالياً.")
                     return False
                 state[username_input] = {"active": True, "login_time": datetime.now().isoformat()}
@@ -145,75 +416,26 @@ def login_ui():
         return True
 
 # -------------------------------
-# 🖥 تنفيذ تسجيل الدخول
-# -------------------------------
-if not st.session_state.get("logged_in"):
-    if not login_ui():
-        st.stop()
-else:
-    state = cleanup_sessions(load_state())
-    username = st.session_state.username
-    rem = remaining_time(state, username)
-    if rem:
-        mins, secs = divmod(int(rem.total_seconds()), 60)
-        st.sidebar.success(f"👋 {username} | ⏳ {mins:02d}:{secs:02d}")
-    else:
-        logout_action()
-
-# ===============================
-# ⚙ إعدادات GitHub
-# ===============================
-GITHUB_EXCEL_URL = "https://github.com/mahmedabdallh123/NEW-CMMS/raw/refs/heads/main/Machine_Service_Lookup.xlsx"
-LOCAL_FILE = "Machine_Service_Lookup.xlsx"
-
-# -------------------------------
-# 🔄 تحديث الملف من GitHub
-# -------------------------------
-def fetch_from_github():
-    try:
-        response = requests.get(GITHUB_EXCEL_URL, stream=True, timeout=10)
-        response.raise_for_status()
-        with open(LOCAL_FILE, "wb") as f:
-            shutil.copyfileobj(response.raw, f)
-        st.cache_data.clear()
-        st.session_state["last_update"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
-        st.success("✅ تم تحديث البيانات من GitHub بنجاح وتم مسح الكاش.")
-    except Exception as e:
-        st.error(f"⚠ فشل التحديث من GitHub: {e}")
-
-# -------------------------------
-# 📂 تحميل البيانات
-# -------------------------------
-@st.cache_data(show_spinner=False)
-def load_all_sheets():
-    if not os.path.exists(LOCAL_FILE):
-        st.error("❌ الملف المحلي غير موجود. برجاء الضغط على زر التحديث أولًا.")
-        return None
-    sheets = pd.read_excel(LOCAL_FILE, sheet_name=None)
-    for name, df in sheets.items():
-        df.columns = df.columns.str.strip()
-    return sheets
-
-# -------------------------------
-# 🧰 دوال مساعدة
+# أدوات الفحص والتنسيق
 # -------------------------------
 def normalize_name(s):
-    if s is None: return ""
+    """تطبيع الأسماء"""
+    if s is None:
+        return ""
     s = str(s).replace("\n", "+")
     s = re.sub(r"[^0-9a-zA-Z\u0600-\u06FF\+\s_/.-]", " ", s)
     s = re.sub(r"\s+", " ", s).strip().lower()
     return s
 
 def split_needed_services(needed_service_str):
+    """تقسيم الخدمات المطلوبة"""
     if not isinstance(needed_service_str, str) or needed_service_str.strip() == "":
         return []
     parts = re.split(r"\+|,|\n|;", needed_service_str)
     return [p.strip() for p in parts if p.strip() != ""]
 
-# -------------------------------
-# 🟩 تلوين الأعمدة
-# -------------------------------
 def highlight_cell(val, col_name):
+    """تلوين الخلايا"""
     color_map = {
         "Service Needed": "background-color: #fff3cd; color:#856404; font-weight:bold;",
         "Done Services": "background-color: #d4edda; color:#155724; font-weight:bold;",
@@ -228,44 +450,52 @@ def highlight_cell(val, col_name):
     return color_map.get(col_name, "")
 
 def style_table(row):
+    """تنسيق الجدول"""
     return [highlight_cell(row[col], col) for col in row.index]
 
-# -------------------------------
-# 🖥 دالة فحص الماكينة
-# -------------------------------
-def check_machine_status(card_num, current_tons, all_sheets):
-    if not all_sheets or "ServicePlan" not in all_sheets:
+def check_machine_status_realtime(card_num, current_tons):
+    """فحص مباشر - يقرأ الملف في اللحظة نفسها"""
+    
+    with st.spinner("🔄 جاري تحميل أحدث البيانات..."):
+        all_sheets = load_excel_fresh()
+    
+    if not all_sheets:
+        st.error("❌ لا يمكن تحميل الملف")
+        return
+    
+    if "ServicePlan" not in all_sheets:
         st.error("❌ الملف لا يحتوي على شيت ServicePlan.")
         return
+    
     service_plan_df = all_sheets["ServicePlan"]
     card_sheet_name = f"Card{card_num}"
+    
     if card_sheet_name not in all_sheets:
         st.warning(f"⚠ لا يوجد شيت باسم {card_sheet_name}")
         return
+    
     card_df = all_sheets[card_sheet_name]
 
-    # نطاق العرض
-    if "view_option" not in st.session_state:
-        st.session_state.view_option = "الشريحة الحالية فقط"
+    load_time = datetime.now().strftime("%H:%M:%S")
+    st.info(f"🕒 وقت تحميل البيانات: {load_time}")
 
     st.subheader("⚙ نطاق العرض")
     view_option = st.radio(
         "اختر نطاق العرض:",
         ("الشريحة الحالية فقط", "كل الشرائح الأقل", "كل الشرائح الأعلى", "نطاق مخصص", "كل الشرائح"),
         horizontal=True,
-        key="view_option"
+        key=f"view_{card_num}_{current_tons}"
     )
 
-    min_range = st.session_state.get("min_range", max(0, current_tons - 500))
-    max_range = st.session_state.get("max_range", current_tons + 500)
+    min_range = max(0, current_tons - 500)
+    max_range = current_tons + 500
     if view_option == "نطاق مخصص":
         col1, col2 = st.columns(2)
         with col1:
-            min_range = st.number_input("من (طن):", min_value=0, step=100, value=min_range, key="min_range")
+            min_range = st.number_input("من (طن):", min_value=0, step=100, value=min_range, key=f"min_{card_num}")
         with col2:
-            max_range = st.number_input("إلى (طن):", min_value=min_range, step=100, value=max_range, key="max_range")
+            max_range = st.number_input("إلى (طن):", min_value=min_range, step=100, value=max_range, key=f"max_{card_num}")
 
-    # اختيار الشرائح
     if view_option == "الشريحة الحالية فقط":
         selected_slices = service_plan_df[(service_plan_df["Min_Tones"] <= current_tons) & (service_plan_df["Max_Tones"] >= current_tons)]
     elif view_option == "كل الشرائح الأقل":
@@ -306,7 +536,6 @@ def check_machine_status(card_num, current_tons, all_sheets):
                         val = str(r.get(col, "")).strip()
                         if val and val.lower() not in ["nan", "none", ""]:
                             done_services_set.add(col)
-            # قراءة آخر تاريخ
             if "Date" in matching_rows.columns:
                 try:
                     cleaned_dates = matching_rows["Date"].astype(str).str.replace("\\", "/", regex=False)
@@ -316,15 +545,12 @@ def check_machine_status(card_num, current_tons, all_sheets):
                         last_date = dates.loc[idx].strftime("%d/%m/%Y")
                 except:
                     last_date = "-"
-            # آخر طن
             if "Tones" in matching_rows.columns:
                 tons_vals = pd.to_numeric(matching_rows["Tones"], errors="coerce")
                 if tons_vals.notna().any():
                     last_tons = int(tons_vals.max())
-            # Other
             if "Other" in matching_rows.columns:
                 last_other = str(matching_rows["Other"].dropna().iloc[-1]) if matching_rows["Other"].notna().any() else "-"
-            # Servised by
             if "Servised by" in matching_rows.columns:
                 last_servised_by = str(matching_rows["Servised by"].dropna().iloc[-1]) if matching_rows["Servised by"].notna().any() else "-"
 
@@ -345,11 +571,10 @@ def check_machine_status(card_num, current_tons, all_sheets):
         })
 
     result_df = pd.DataFrame(all_results).dropna(how="all").reset_index(drop=True)
-
-    st.markdown("### 📋 نتائج الفحص")
+    
+    st.markdown("📋 *نتائج الفحص*")
     st.dataframe(result_df.style.apply(style_table, axis=1), use_container_width=True)
 
-    # تنزيل النتائج
     buffer = io.BytesIO()
     result_df.to_excel(buffer, index=False, engine="openpyxl")
     st.download_button(
@@ -359,28 +584,600 @@ def check_machine_status(card_num, current_tons, all_sheets):
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
 
-# ===============================
-# 🖥 الواجهة الرئيسية
-# ===============================
-st.title("🏭 سيرفيس تحضيرات Bail Yarn")
+# -------------------------------
+# دوال مساعدة للتعديل
+# -------------------------------
+def find_range_columns(df):
+    """البحث عن أعمدة المدى"""
+    min_col, max_col, card_col = None, None, None
+    for c in df.columns:
+        c_low = c.strip().lower()
+        if c_low in ("min_tones", "min_tone", "min tones", "min"):
+            min_col = c
+        if c_low in ("max_tones", "max_tone", "max tones", "max"):
+            max_col = c
+        if c_low in ("card", "machine", "machine_no", "machine id"):
+            card_col = c
+    return min_col, max_col, card_col
 
-if st.button("🔄 تحديث البيانات من GitHub"):
-    fetch_from_github()
+def calculate_insert_position(df_add, new_data, min_col, max_col, card_col):
+    """حساب موضع الإدراج"""
+    def to_num_or_none(x):
+        try:
+            return float(x)
+        except:
+            return None
 
-if "last_update" in st.session_state:
-    st.caption(f"🕒 آخر تحديث: {st.session_state['last_update']}")
+    new_min_raw = str(new_data.get(min_col, "")).strip()
+    new_max_raw = str(new_data.get(max_col, "")).strip()
+    new_min_num = to_num_or_none(new_min_raw)
+    new_max_num = to_num_or_none(new_max_raw)
 
-all_sheets = load_all_sheets()
+    insert_pos = len(df_add)
+    mask = pd.Series([False] * len(df_add))
 
-col1, col2 = st.columns(2)
-with col1:
-    card_num = st.number_input("رقم الماكينة:", min_value=1, step=1, key="card_num")
-with col2:
-    current_tons = st.number_input("عدد الأطنان الحالية:", min_value=0, step=100, key="current_tons")
+    if card_col:
+        new_card = str(new_data.get(card_col, "")).strip()
+        if new_card != "":
+            if new_min_num is not None and new_max_num is not None:
+                mask = (
+                    (df_add[card_col].astype(str).str.strip() == new_card) &
+                    (pd.to_numeric(df_add[min_col], errors='coerce') == new_min_num) &
+                    (pd.to_numeric(df_add[max_col], errors='coerce') == new_max_num)
+                )
+            else:
+                mask = (
+                    (df_add[card_col].astype(str).str.strip() == new_card) &
+                    (df_add[min_col].astype(str).str.strip() == new_min_raw) &
+                    (df_add[max_col].astype(str).str.strip() == new_max_raw)
+                )
+    else:
+        if new_min_num is not None and new_max_num is not None:
+            mask = (
+                (pd.to_numeric(df_add[min_col], errors='coerce') == new_min_num) &
+                (pd.to_numeric(df_add[max_col], errors='coerce') == new_max_num)
+            )
+        else:
+            mask = (
+                (df_add[min_col].astype(str).str.strip() == new_min_raw) &
+                (df_add[max_col].astype(str).str.strip() == new_max_raw)
+            )
 
-if st.button("عرض الحالة"):
-    st.session_state["show_results"] = True
+    if mask.any():
+        insert_pos = mask[mask].index[-1] + 1
+    else:
+        try:
+            df_add["_min_num"] = pd.to_numeric(df_add[min_col], errors='coerce').fillna(-1)
+            if new_min_num is not None:
+                insert_pos = int((df_add["_min_num"] < new_min_num).sum())
+            else:
+                insert_pos = len(df_add)
+            df_add = df_add.drop(columns=["_min_num"])
+        except Exception:
+            insert_pos = len(df_add)
 
-if st.session_state.get("show_results", False) and all_sheets:
-    check_machine_status(st.session_state.card_num, st.session_state.current_tons, all_sheets)
+    return insert_pos
 
+def safe_date_analysis(df, date_column='Date'):
+    """تحليل آمن للتواريخ"""
+    if date_column not in df.columns:
+        return "-", "-"
+    
+    try:
+        # تحويل التواريخ بشكل آمن
+        dates = pd.to_datetime(df[date_column], errors='coerce')
+        valid_dates = dates.dropna()
+        
+        if len(valid_dates) == 0:
+            return "-", "-"
+        
+        min_date = valid_dates.min().strftime("%Y-%m-%d")
+        max_date = valid_dates.max().strftime("%Y-%m-%d")
+        return min_date, max_date
+    except Exception:
+        return "-", "-"
+
+# -------------------------------
+# الواجهة الرئيسية
+# -------------------------------
+st.set_page_config(page_title="CMMS - Bail Yarn", layout="wide", page_icon="🏭")
+
+with st.sidebar:
+    st.header("👤 الجلسة")
+    if not st.session_state.get("logged_in"):
+        if not login_ui():
+            st.stop()
+    else:
+        state = cleanup_sessions(load_state())
+        username = st.session_state.username
+        rem = remaining_time(state, username)
+        if rem:
+            mins, secs = divmod(int(rem.total_seconds()), 60)
+            st.success(f"👋 {username} | ⏳ {mins:02d}:{secs:02d}")
+        else:
+            logout_action()
+
+    st.markdown("---")
+    st.subheader("🔄 تحديث البيانات")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        if st.button("📥 تحميل من GitHub", help="تحميل أحدث نسخة من GitHub", use_container_width=True):
+            with st.spinner("جاري التحميل..."):
+                if download_from_github():
+                    st.success("✅ تم التحميل بنجاح")
+
+    with col2:
+        if st.button("🔄 تحديث قسري", help="تحديث قسري للبيانات", use_container_width=True):
+            with st.spinner("جاري التحديث..."):
+                force_refresh()
+    
+    st.markdown("---")
+    st.subheader("📊 حالة النظام")
+    
+    if os.path.exists(LOCAL_FILE):
+        file_time = datetime.fromtimestamp(os.path.getmtime(LOCAL_FILE))
+        file_size = os.path.getsize(LOCAL_FILE)
+        st.success(f"📁 الملف: {file_time.strftime('%H:%M:%S')}")
+        st.info(f"📊 الحجم: {file_size:,} بايت")
+        
+        # معلومات الملف
+        try:
+            sheets = load_excel_fresh()
+            if sheets:
+                st.info(f"📋 عدد الشيتات: {len(sheets)}")
+                total_rows = sum(len(df) for df in sheets.values())
+                st.info(f"📈 إجمالي الصفوف: {total_rows:,}")
+        except:
+            pass
+    else:
+        st.error("❌ الملف غير موجود")
+    
+    # حالة GitHub
+    try:
+        token = st.secrets.get("github", {}).get("token")
+        if token and GITHUB_AVAILABLE:
+            st.success("🔗 GitHub: متصل")
+        else:
+            st.info("🔗 GitHub: بدون توكن")
+    except:
+        st.error("🔗 GitHub: خطأ في التكوين")
+    
+    st.markdown("---")
+    
+    # إحصائيات الجلسة
+    active_sessions = [u for u, info in state.items() if info.get("active")]
+    st.metric("المستخدمين النشطين", f"{len(active_sessions)} / {MAX_ACTIVE_USERS}")
+    
+    if st.button("🚪 تسجيل الخروج", use_container_width=True):
+        logout_action()
+
+# التبويبات الرئيسية
+st.title("🏭 CMMS - Bail Yarn")
+st.markdown("نظام إدارة صيانة الماكينات - الإصدار 2.0")
+
+tabs = st.tabs(["📊 عرض وفحص الماكينات", "🛠 تعديل وإدارة البيانات", "⚙ إدارة المستخدمين", "📈 التقارير والإحصائيات"])
+
+# -------------------------------
+# Tab 1: عرض وفحص الماكينات
+# -------------------------------
+with tabs[0]:
+    st.header("📊 عرض وفحص الماكينات")
+    
+    # معلومات التحديث
+    if os.path.exists(LOCAL_FILE):
+        file_time = datetime.fromtimestamp(os.path.getmtime(LOCAL_FILE))
+        st.info(f"🕒 آخر تحديث للملف: {file_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    if not os.path.exists(LOCAL_FILE):
+        st.error("❌ الملف غير موجود. اضغط 'تحميل من GitHub' في الشريط الجانبي.")
+    else:
+        col1, col2 = st.columns(2)
+        with col1:
+            card_num = st.number_input("رقم الماكينة:", min_value=1, step=1, key="card_num_main")
+        with col2:
+            current_tons = st.number_input("عدد الأطنان الحالية:", min_value=0, step=100, key="current_tons_main")
+
+        if st.button("🔍 فحص الحالة الآن", type="primary", use_container_width=True):
+            check_machine_status_realtime(card_num, current_tons)
+
+# -------------------------------
+# Tab 2: تعديل وإدارة البيانات
+# -------------------------------
+with tabs[1]:
+    st.header("🛠 تعديل وإدارة البيانات")
+    
+    # معلومات التحديث
+    if os.path.exists(LOCAL_FILE):
+        file_time = datetime.fromtimestamp(os.path.getmtime(LOCAL_FILE))
+        st.info(f"🕒 آخر تحديث للملف: {file_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    username = st.session_state.get("username")
+    token_exists = bool(st.secrets.get("github", {}).get("token", None))
+    can_push = (username == "admin") or (token_exists and GITHUB_AVAILABLE)
+
+    with st.spinner("🔄 جاري تحميل البيانات..."):
+        sheets_data = load_excel_for_edit()
+    
+    if not sheets_data:
+        st.error("❌ لا يمكن تحميل البيانات")
+    else:
+        tab1, tab2, tab3, tab4 = st.tabs(["✏ تعديل البيانات", "➕ إضافة صف جديد", "🆕 إضافة عمود", "🗑 حذف صف"])
+
+        # Tab1 - تعديل وعرض
+        with tab1:
+            st.subheader("✏ تعديل البيانات")
+            sheet_name = st.selectbox("اختر الشيت:", list(sheets_data.keys()), key="edit_sheet")
+            
+            if sheet_name in sheets_data:
+                df = sheets_data[sheet_name].copy()
+                st.write(f"عدد الصفوف: {len(df)} | عدد الأعمدة: {len(df.columns)}")
+                
+                edited_df = st.data_editor(df, num_rows="dynamic", key=f"editor_{sheet_name}",
+                                         use_container_width=True)
+
+                if st.button("💾 حفظ التعديلات", key=f"save_{sheet_name}", type="primary", use_container_width=True):
+                    sheets_data[sheet_name] = edited_df
+                    if save_excel_locally(sheets_data, f"تعديل {sheet_name} بواسطة {username}"):
+                        st.balloons()
+                        st.success("✅ تم الحفظ بنجاح! انتقل إلى تبويب الفحص لرؤية التغييرات.")
+
+        # Tab2 - إضافة صف
+        with tab2:
+            st.subheader("➕ إضافة صف جديد")
+            sheet_name_add = st.selectbox("اختر الشيت:", list(sheets_data.keys()), key="add_sheet")
+            
+            if sheet_name_add in sheets_data:
+                df_add = sheets_data[sheet_name_add].copy()
+                
+                st.markdown("أدخل بيانات الصف الجديد:")
+                new_data = {}
+                cols = st.columns(3)
+                for i, col in enumerate(df_add.columns):
+                    with cols[i % 3]:
+                        new_data[col] = st.text_input(f"{col}", key=f"new_{sheet_name_add}_{col}")
+
+                if st.button("💾 إضافة الصف", key=f"add_{sheet_name_add}", type="primary", use_container_width=True):
+                    min_col, max_col, card_col = find_range_columns(df_add)
+                    
+                    if not min_col or not max_col:
+                        st.error("⚠ لم يتم العثور على أعمدة Min_Tones و/أو Max_Tones في الشيت.")
+                    else:
+                        insert_pos = calculate_insert_position(df_add, new_data, min_col, max_col, card_col)
+                        
+                        new_row_df = pd.DataFrame([new_data])
+                        df_top = df_add.iloc[:insert_pos].reset_index(drop=True)
+                        df_bottom = df_add.iloc[insert_pos:].reset_index(drop=True)
+                        df_new = pd.concat([df_top, new_row_df, df_bottom], ignore_index=True)
+                        sheets_data[sheet_name_add] = df_new
+                        
+                        if save_excel_locally(sheets_data, f"إضافة صف في {sheet_name_add} بواسطة {username}"):
+                            st.balloons()
+                            st.success("✅ تم الإضافة بنجاح! انتقل إلى تبويب الفحص لرؤية التغييرات.")
+
+        # Tab3 - إضافة عمود
+        with tab3:
+            st.subheader("🆕 إضافة عمود جديد")
+            sheet_name_col = st.selectbox("اختر الشيت:", list(sheets_data.keys()), key="add_col_sheet")
+            
+            if sheet_name_col in sheets_data:
+                df_col = sheets_data[sheet_name_col].copy()
+                st.write(f"الأعمدة الحالية: {', '.join(df_col.columns.tolist())}")
+                
+                new_col_name = st.text_input("اسم العمود الجديد:")
+                default_value = st.text_input("القيمة الافتراضية (اختياري):", "")
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    data_type = st.selectbox("نوع البيانات:", ["نص", "رقم", "تاريخ"])
+                with col2:
+                    required = st.checkbox("حقل مطلوب")
+
+                if st.button("💾 إضافة العمود", key=f"add_col_{sheet_name_col}", type="primary", use_container_width=True):
+                    if new_col_name:
+                        if new_col_name in df_col.columns:
+                            st.warning("⚠ هذا العمود موجود بالفعل!")
+                        else:
+                            # تعيين القيمة الافتراضية بناءً على نوع البيانات
+                            if data_type == "رقم":
+                                try:
+                                    default_value = float(default_value) if default_value else 0
+                                except:
+                                    default_value = 0
+                            elif data_type == "تاريخ":
+                                default_value = default_value if default_value else datetime.now().strftime("%Y-%m-%d")
+                            
+                            df_col[new_col_name] = default_value
+                            sheets_data[sheet_name_col] = df_col
+                            
+                            if save_excel_locally(sheets_data, f"إضافة عمود '{new_col_name}' في {sheet_name_col} بواسطة {username}"):
+                                st.balloons()
+                                st.success("✅ تم إضافة العمود بنجاح! انتقل إلى تبويب الفحص لرؤية التغييرات.")
+                    else:
+                        st.warning("⚠ الرجاء إدخال اسم العمود")
+
+        # Tab4 - حذف صف
+        with tab4:
+            st.subheader("🗑 حذف صف من الشيت")
+            sheet_name_del = st.selectbox("اختر الشيت:", list(sheets_data.keys()), key="delete_sheet")
+            
+            if sheet_name_del in sheets_data:
+                df_del = sheets_data[sheet_name_del].copy()
+
+                st.markdown("### 📋 بيانات الشيت الحالية")
+                st.dataframe(df_del, use_container_width=True)
+
+                st.markdown("### ✏ اختر الصفوف للحذف")
+                st.write("💡 ملاحظة: رقم الصف يبدأ من 0 (أول صف = 0)")
+                
+                rows_to_delete = st.text_input("أدخل أرقام الصفوف مفصولة بفاصلة (مثلاً: 0,2,5):")
+                show_preview = st.checkbox("عرض معاينة قبل الحذف")
+                
+                if rows_to_delete:
+                    try:
+                        rows_list = [int(x.strip()) for x in rows_to_delete.split(",") if x.strip().isdigit()]
+                        rows_list = [r for r in rows_list if 0 <= r < len(df_del)]
+                        
+                        if rows_list:
+                            if show_preview:
+                                st.warning(f"⚠ سيتم حذف {len(rows_list)} صفوف:")
+                                preview_df = df_del.iloc[rows_list]
+                                st.dataframe(preview_df, use_container_width=True)
+                            
+                            confirm_delete = st.checkbox("✅ أؤكد أني أريد حذف هذه الصفوف بشكل نهائي")
+                            
+                            if st.button("🗑 تنفيذ الحذف", key=f"delete_rows_{sheet_name_del}", type="primary", use_container_width=True):
+                                if not confirm_delete:
+                                    st.warning("⚠ برجاء تأكيد الحذف أولاً")
+                                else:
+                                    df_new = df_del.drop(rows_list).reset_index(drop=True)
+                                    sheets_data[sheet_name_del] = df_new
+                                    
+                                    if save_excel_locally(sheets_data, f"حذف {len(rows_list)} صفوف من {sheet_name_del} بواسطة {username}"):
+                                        st.balloons()
+                                        st.success(f"✅ تم حذف {len(rows_list)} صفوف بنجاح!")
+                        else:
+                            st.warning("⚠ لم يتم العثور على صفوف صحيحة.")
+                    except Exception as e:
+                        st.error(f"❌ حدث خطأ أثناء معالجة البيانات: {e}")
+
+# -------------------------------
+# Tab 3: إدارة المستخدمين
+# -------------------------------
+with tabs[2]:
+    st.header("⚙ إدارة المستخدمين")
+    users = load_users()
+    username = st.session_state.get("username")
+
+    if username != "admin":
+        st.info("🛑 فقط المستخدم 'admin' يمكنه إدارة المستخدمين.")
+        st.write("👥 المستخدمين الحاليين:", ", ".join(users.keys()))
+    else:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("👥 المستخدمين الموجودين")
+            
+            # تحضير بيانات المستخدمين للعرض
+            users_data = []
+            for user, info in users.items():
+                users_data.append({
+                    "المستخدم": user,
+                    "الدور": info.get("role", "مستخدم"),
+                    "الحالة": "نشط" if load_state().get(user, {}).get("active") else "غير نشط"
+                })
+            
+            users_df = pd.DataFrame(users_data)
+            st.dataframe(users_df, use_container_width=True)
+            
+            st.metric("إجمالي المستخدمين", len(users))
+            
+            st.subheader("🗑 حذف مستخدم")
+            del_user = st.selectbox("اختر مستخدم للحذف:", 
+                                   [u for u in users.keys() if u != "admin"],
+                                   key="del_user_select")
+            
+            if st.button("حذف المستخدم", type="secondary", use_container_width=True):
+                if del_user in users:
+                    users.pop(del_user)
+                    save_users(users)
+                    st.success(f"✅ تم حذف المستخدم '{del_user}'")
+                    st.rerun()
+
+        with col2:
+            st.subheader("➕ إضافة مستخدم جديد")
+            
+            new_user = st.text_input("اسم المستخدم الجديد:", placeholder="أدخل اسم المستخدم")
+            new_pass = st.text_input("كلمة المرور:", type="password", placeholder="أدخل كلمة المرور")
+            confirm_pass = st.text_input("تأكيد كلمة المرور:", type="password", placeholder="أكد كلمة المرور")
+            user_role = st.selectbox("دور المستخدم:", ["مستخدم", "مشرف", "فني"])
+            
+            if st.button("إضافة مستخدم", type="primary", use_container_width=True):
+                if not new_user or not new_pass:
+                    st.warning("⚠ الرجاء إدخال اسم المستخدم وكلمة المرور")
+                elif new_pass != confirm_pass:
+                    st.error("❌ كلمة المرور غير متطابقة")
+                elif new_user in users:
+                    st.warning("⚠ هذا المستخدم موجود بالفعل")
+                else:
+                    users[new_user] = {
+                        "password": new_pass,
+                        "role": user_role,
+                        "created_at": datetime.now().isoformat()
+                    }
+                    save_users(users)
+                    st.success(f"✅ تم إضافة المستخدم '{new_user}' بنجاح")
+                    st.rerun()
+
+        # قسم الإحصائيات
+        st.markdown("---")
+        st.subheader("📊 إحصائيات المستخدمين")
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            active_count = len([u for u, info in load_state().items() if info.get("active")])
+            st.metric("المستخدمين النشطين", active_count)
+        with col2:
+            admin_count = len([u for u, info in users.items() if info.get("role") == "مشرف"])
+            st.metric("المشرفين", admin_count)
+        with col3:
+            st.metric("السعة المتاحة", f"{MAX_ACTIVE_USERS} مستخدم")
+
+# -------------------------------
+# Tab 4: التقارير والإحصائيات
+# -------------------------------
+with tabs[3]:
+    st.header("📈 التقارير والإحصائيات")
+    
+    # معلومات التحديث
+    if os.path.exists(LOCAL_FILE):
+        file_time = datetime.fromtimestamp(os.path.getmtime(LOCAL_FILE))
+        st.info(f"🕒 آخر تحديث للملف: {file_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    
+    if not os.path.exists(LOCAL_FILE):
+        st.warning("⚠ لا توجد بيانات لعرض التقارير")
+    else:
+        with st.spinner("🔄 جاري تحميل البيانات..."):
+            sheets_data = load_excel_fresh()
+        
+        if not sheets_data:
+            st.error("❌ لا يمكن تحميل البيانات من الملف")
+        else:
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                total_sheets = len(sheets_data)
+                st.metric("عدد الشيتات", total_sheets)
+            
+            with col2:
+                total_rows = sum(len(df) for df in sheets_data.values())
+                st.metric("إجمالي الصفوف", f"{total_rows:,}")
+            
+            with col3:
+                card_sheets = [name for name in sheets_data.keys() if name.startswith('Card')]
+                st.metric("شيتات الماكينات", len(card_sheets))
+            
+            st.markdown("---")
+            
+            # تحليل شيتات الماكينات
+            st.subheader("📋 تحليل شيتات الماكينات")
+            
+            if card_sheets:
+                machine_data = []
+                
+                for sheet_name in card_sheets:
+                    df = sheets_data[sheet_name]
+                    
+                    # استخدام الدالة المحسنة لتحليل التواريخ
+                    first_date, last_date = safe_date_analysis(df, 'Date')
+                    
+                    machine_data.append({
+                        "الشيت": sheet_name,
+                        "عدد الصفوف": len(df),
+                        "عدد الأعمدة": len(df.columns),
+                        "أول تاريخ": first_date,
+                        "آخر تاريخ": last_date
+                    })
+                
+                if machine_data:
+                    machine_df = pd.DataFrame(machine_data)
+                    st.dataframe(machine_df, use_container_width=True)
+                else:
+                    st.info("📭 لا توجد بيانات لشيتات الماكينات")
+            else:
+                st.info("📭 لا توجد شيتات ماكينات (Card) للتحليل")
+            
+            # ServicePlan analysis
+            st.subheader("📊 تحليل خطط الصيانة")
+            if "ServicePlan" in sheets_data:
+                service_df = sheets_data["ServicePlan"]
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write("*ملخص خطط الصيانة:*")
+                    st.write(f"- عدد الشرائح: {len(service_df)}")
+                    
+                    # حساب نطاق الأطنان بشكل آمن
+                    try:
+                        if 'Min_Tones' in service_df.columns and 'Max_Tones' in service_df.columns:
+                            min_tones = service_df['Min_Tones'].min()
+                            max_tones = service_df['Max_Tones'].max()
+                            st.write(f"- نطاق الأطنان: {min_tones} إلى {max_tones}")
+                        else:
+                            st.write("- نطاق الأطنان: غير متوفر")
+                    except Exception as e:
+                        st.write(f"- نطاق الأطنان: خطأ في الحساب - {e}")
+                
+                with col2:
+                    if 'Service' in service_df.columns:
+                        try:
+                            # تحويل القيم إلى نص قبل التقسيم
+                            services = service_df['Service'].fillna('').astype(str)
+                            services_split = services.str.split('[+,]').explode().str.strip()
+                            services_split = services_split[services_split != '']
+                            
+                            if not services_split.empty:
+                                service_counts = services_split.value_counts()
+                                st.write("*الخدمات الأكثر تكراراً:*")
+                                for service, count in service_counts.head(5).items():
+                                    st.write(f"- {service}: {count} مرة")
+                            else:
+                                st.write("- لا توجد خدمات للتحليل")
+                        except Exception as e:
+                            st.write(f"- تحليل الخدمات: خطأ - {e}")
+                    else:
+                        st.write("- تحليل الخدمات: عمود الخدمات غير موجود")
+            else:
+                st.info("📭 لا يوجد شيت ServicePlan للتحليل")
+
+# -------------------------------
+# تذييل الصفحة والمساعدة
+# -------------------------------
+st.sidebar.markdown("---")
+with st.sidebar.expander("ℹ المساعدة والدعم"):
+    st.markdown("""
+    *📖 دليل الاستخدام السريع:*
+    
+    🔍 *فحص الماكينات:*
+    - أدخل رقم الماكينة والأطنان
+    - اضغط "فحص الحالة الآن"
+    - اختر نطاق العرض المناسب
+    
+    ✏ *تعديل البيانات:*
+    - اختر الشيت المطلوب
+    - عدل مباشرة في الجدول
+    - احفظ التغييرات
+    
+    👥 *إدارة المستخدمين:*
+    - للمسؤولين فقط
+    - إضافة/حذف المستخدمين
+    - تحديد الصلاحيات
+    
+    🔄 *المزامنة:*
+    - استخدم "تحميل من GitHub" لأحدث نسخة
+    - استخدم "تحديث قسري" إذا كانت هناك مشاكل
+    - البيانات تحفظ تلقائياً
+    
+    *📞 الدعم الفني:*
+    - في حالة وجود مشاكل او محتاج دعم فني مقترح يرجي تواصل عبر واتساب (01274424062)
+    """)
+
+st.markdown("---")
+footer = """
+<div style="text-align: center; color: gray; padding: 20px;">
+    <p><strong>نظام إدارة صيانة الماكينات (CMMS) - Bail Yarn</strong></p>
+    <p>الإصدار 2.0 | تم التطوير باستخدام Streamlit | © 2024</p>
+</div>
+"""
+st.markdown(footer, unsafe_allow_html=True)
+
+# -------------------------------
+# التهيئة الأولية
+# -------------------------------
+if not os.path.exists(LOCAL_FILE):
+    st.sidebar.info("🔄 جاري التحميل الأولي...")
+    if download_from_github():
+        st.sidebar.success("✅ تم التهيئة بنجاح")
+        st.rerun()
+    else:
+        st.sidebar.error("❌ فشل التحميل الأولي")
