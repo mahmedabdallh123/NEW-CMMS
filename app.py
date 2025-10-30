@@ -891,10 +891,10 @@ with tabs[1]:
                                 if save_excel_direct(sheets_data, f"حذف {len(rows_list)} صفوف من {sheet_name_del} بواسطة {username}"):
                                     st.balloons()
                                     st.success(f"✅ تم حذف {len(rows_list)} صفوف بنجاح!")
-                    else:
-                        st.warning("⚠ لم يتم العثور على صفوف صحيحة.")
-                    except Exception as e:
-                        st.error(f"❌ حدث خطأ أثناء معالجة البيانات: {e}")
+                                else:
+                                    st.warning("⚠ لم يتم العثور على صفوف صحيحة.")
+                                except Exception as e:
+                                    st.error(f"❌ حدث خطأ أثناء معالجة البيانات: {e}")
 
 # -------------------------------
 # Tab 3: إدارة المستخدمين
@@ -1140,3 +1140,4 @@ if not os.path.exists(LOCAL_FILE):
         st.rerun()
     else:
         st.sidebar.error("❌ فشل التحميل الأولي")
+
