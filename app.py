@@ -26,7 +26,7 @@ SESSION_DURATION = timedelta(minutes=30)
 MAX_ACTIVE_USERS = 5
 
 # إعدادات GitHub
-REPO_NAME = "mahmedabdallh123/NEW-CMMS"
+REPO_NAME = "mahmedabdallh123/input-data"
 BRANCH = "main"
 FILE_PATH = "Machine_Service_Lookup.xlsx"
 LOCAL_FILE = "Machine_Service_Lookup.xlsx"
@@ -891,9 +891,8 @@ with tabs[1]:
                                 if save_excel_direct(sheets_data, f"حذف {len(rows_list)} صفوف من {sheet_name_del} بواسطة {username}"):
                                     st.balloons()
                                     st.success(f"✅ تم حذف {len(rows_list)} صفوف بنجاح!")
-                                else:
-                                    st.warning("⚠ لم يتم العثور على صفوف صحيحة.")
-                               
+                    except Exception as e:
+                        st.error(f"❌ حدث خطأ أثناء معالجة البيانات: {e}")
 
 # -------------------------------
 # Tab 3: إدارة المستخدمين
@@ -1139,5 +1138,3 @@ if not os.path.exists(LOCAL_FILE):
         st.rerun()
     else:
         st.sidebar.error("❌ فشل التحميل الأولي")
-
-
