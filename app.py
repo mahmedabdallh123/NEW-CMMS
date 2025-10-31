@@ -1,4 +1,3 @@
-# app.py
 import streamlit as st
 import pandas as pd
 import json
@@ -26,11 +25,11 @@ SESSION_DURATION = timedelta(minutes=10)  # مدة الجلسة 10 دقائق
 MAX_ACTIVE_USERS = 2  # أقصى عدد مستخدمين مسموح
 
 # إعدادات GitHub (مسارات الملف والريبو)
-REPO_NAME = "mahmedabdallh123/input-data"  # عدل إذا لزم
+REPO_NAME = "mahmedabdallh123/cmms"  # عدل إذا لزم
 BRANCH = "main"
-FILE_PATH = "Machine_Service_Lookup.xlsx"
-LOCAL_FILE = "Machine_Service_Lookup.xlsx"
-GITHUB_EXCEL_URL = "https://github.com/mahmedabdallh123/NEW-CMMS/raw/refs/heads/main/Machine_Service_Lookup.xlsx"
+FILE_PATH = "data_A.xlsx"
+LOCAL_FILE = "data_A.xlsx"
+GITHUB_EXCEL_URL = "https://github.com/mahmedabdallh123/NEW-CMMS/raw/refs/heads/main/data_A.xlsx"
 
 # -------------------------------
 # 🧩 دوال مساعدة للملفات والحالة
@@ -153,7 +152,7 @@ def login_ui():
                 st.session_state.logged_in = True
                 st.session_state.username = username_input
                 st.success(f"✅ تم تسجيل الدخول: {username_input}")
-                st.experimental_rerun()
+                st.rerun()
             else:
                 st.error("❌ كلمة المرور غير صحيحة.")
         return False
@@ -496,7 +495,7 @@ sheets_edit = load_sheets_for_edit()
 # واجهة التبويبات الرئيسية
 st.title("🏭 CMMS - Bail Yarn")
 
-tabs = st.tabs(["📊 عرض وفحص الماكينات", "🛠 تعديل وإدارة البيانات (GitHub)","⚙ إدارة المستخدمين"])
+tabs = st.tabs(["📊 عرض وفحص الماكينات", "🛠 تعديل وإدارة البيانات","⚙ إدارة المستخدمين"])
 
 # -------------------------------
 # Tab: عرض وفحص الماكينات (الكود الأول)
@@ -504,7 +503,7 @@ tabs = st.tabs(["📊 عرض وفحص الماكينات", "🛠 تعديل وإ
 with tabs[0]:
     st.header("📊 عرض وفحص الماكينات")
     if all_sheets is None:
-        st.warning("❗ الملف المحلي غير موجود. استخدم أحد أزرار التحديث في الشريط الجانبي لتحميل الملف من GitHub.")
+        st.warning("❗ الملف المحلي غير موجود. استخدم أحد أزرار التحديث في الشريط الجانبي لتحميل الملف من cloud.")
     else:
         col1, col2 = st.columns(2)
         with col1:
@@ -522,7 +521,7 @@ with tabs[0]:
 # Tab: تعديل وإدارة البيانات (الكود الثاني)
 # -------------------------------
 with tabs[1]:
-    st.header("🛠 تعديل وإدارة البيانات (GitHub)")
+    st.header("🛠 تعديل وإدارة البيانات")
 
     # تحقق صلاحية الرفع: إما admin أو يوجد توكين في secrets وPyGithub متاح
     username = st.session_state.get("username")
@@ -530,7 +529,7 @@ with tabs[1]:
     can_push = (username == "admin") or (token_exists and GITHUB_AVAILABLE)
 
     if sheets_edit is None:
-        st.warning("❗ الملف المحلي غير موجود. اضغط تحديث من GitHub في الشريط الجانبي أولًا.")
+        st.warning("❗ الملف المحلي غير موجود. اضغط تحديث من cloud في الشريط الجانبي أولًا.")
     else:
         tab1, tab2, tab3, tab4 = st.tabs([
             "عرض وتعديل شيت",
