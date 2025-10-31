@@ -1,3 +1,4 @@
+# app.py - إصلاح الخطأ في قسم التقارير
 import streamlit as st
 import pandas as pd
 import json
@@ -30,32 +31,6 @@ BRANCH = "main"
 FILE_PATH = "Machine_Service_Lookup.xlsx"
 LOCAL_FILE = "Machine_Service_Lookup.xlsx"
 GITHUB_EXCEL_RAW_BASE = f"https://raw.githubusercontent.com/{REPO_NAME}/{BRANCH}/{FILE_PATH}"
-
-# -------------------------------
-# دوال مسح الذاكرة المؤقتة
-# -------------------------------
-def clear_cache_and_reload():
-    """مسح الذاكرة المؤقتة وإعادة تحميل البيانات"""
-    try:
-        # مسح ذاكرة التخزين المؤقت لـ pandas
-        if hasattr(pd, 'read_excel') and hasattr(pd.read_excel, 'cache_clear'):
-            pd.read_excel.cache_clear()
-        
-        # إعادة تعيين حالة الجلسة
-        keys_to_clear = ['sheets_data', 'excel_data', 'last_loaded']
-        for key in keys_to_clear:
-            if key in st.session_state:
-                del st.session_state[key]
-        
-        # إضافة تأخير بسيط لضمان مسح الذاكرة المؤقتة
-        time.sleep(1)
-        
-        st.success("✅ تم تحديث البيانات بنجاح")
-        st.rerun()
-        return True
-    except Exception as e:
-        st.error(f"❌ خطأ في مسح الذاكرة المؤقتة: {e}")
-        return False
 
 # -------------------------------
 # دوال الملفات والمستخدمين
@@ -140,14 +115,9 @@ def load_excel_fresh():
         return {}
     
     try:
-        # إضافة طابع زمني لمنع التخزين المؤقت
-        timestamp = int(time.time())
         sheets = pd.read_excel(LOCAL_FILE, sheet_name=None)
         for name, df in sheets.items():
             df.columns = df.columns.str.strip()
-        
-        # تخزين وقت التحميل الأخير
-        st.session_state.last_loaded = timestamp
         return sheets
     except Exception as e:
         st.error(f"❌ خطأ في قراءة الملف: {e}")
@@ -172,7 +142,6 @@ def download_from_github():
         timestamp = int(time.time())
         url = f"{GITHUB_EXCEL_RAW_BASE}?t={timestamp}"
         
-        st.info("🔄 جاري تحميل أحدث نسخة من GitHub...")
         response = requests.get(url, timeout=30)
         response.raise_for_status()
         
@@ -182,9 +151,6 @@ def download_from_github():
         if os.path.exists(LOCAL_FILE):
             file_size = os.path.getsize(LOCAL_FILE)
             st.success(f"✅ تم التحديث من GitHub | الحجم: {file_size} بايت")
-            
-            # مسح الذاكرة المؤقتة بعد التحديث
-            clear_cache_and_reload()
             return True
         else:
             st.error("❌ فشل في حفظ الملف المحلي")
@@ -210,10 +176,7 @@ def save_to_github(sheets_dict, commit_message="تحديث من التطبيق")
         file_size = os.path.getsize(LOCAL_FILE)
         st.success(f"✅ تم الحفظ المحلي | الحجم: {file_size} بايت")
         
-        # 3. تحديث الذاكرة المؤقتة مباشرة بعد الحفظ
-        clear_cache_and_reload()
-        
-        # 4. رفع إلى GitHub
+        # 3. رفع إلى GitHub
         token = None
         try:
             token = st.secrets["github"]["token"]
@@ -601,21 +564,16 @@ with st.sidebar:
             logout_action()
 
     st.markdown("---")
-    st.subheader("🔄 تحديث البيانات")
+    st.subheader("🔄 مزامنة GitHub")
     
-    col1, col2, col3 = st.columns(3)
+    col1, col2 = st.columns(2)
     with col1:
-        if st.button("📥 تحميل حديث", help="تحميل أحدث نسخة من GitHub", use_container_width=True):
+        if st.button("📥 تحميل", help="تحميل أحدث نسخة من GitHub"):
             if download_from_github():
-                st.success("✅ تم تحميل أحدث نسخة")
-
+                st.rerun()
+    
     with col2:
-        if st.button("🔄 تحديث البيانات", help="تحديث البيانات من الملف المحلي", use_container_width=True):
-            if clear_cache_and_reload():
-                st.success("✅ تم تحديث البيانات")
-
-    with col3:
-        if st.button("🔄 إعادة تحميل", help="إعادة تحميل الصفحة", use_container_width=True):
+        if st.button("🔄 إعادة تحميل", help="إعادة تحميل الصفحة"):
             st.rerun()
     
     st.markdown("---")
@@ -670,12 +628,6 @@ tabs = st.tabs(["📊 عرض وفحص الماكينات", "🛠 تعديل وإ
 with tabs[0]:
     st.header("📊 عرض وفحص الماكينات")
     
-    # زر تحديث البيانات
-    col1, col2 = st.columns([3, 1])
-    with col2:
-        if st.button("🔄 تحديث البيانات", key="refresh_tab1", use_container_width=True):
-            clear_cache_and_reload()
-    
     if not os.path.exists(LOCAL_FILE):
         st.error("❌ الملف غير موجود. اضغط 'تحميل من GitHub' في الشريط الجانبي.")
     else:
@@ -693,13 +645,6 @@ with tabs[0]:
 # -------------------------------
 with tabs[1]:
     st.header("🛠 تعديل وإدارة البيانات")
-    
-    # زر تحديث البيانات
-    col1, col2 = st.columns([3, 1])
-    with col2:
-        if st.button("🔄 تحديث البيانات", key="refresh_tab2", use_container_width=True):
-            clear_cache_and_reload()
-    
     username = st.session_state.get("username")
     token_exists = bool(st.secrets.get("github", {}).get("token", None))
     can_push = (username == "admin") or (token_exists and GITHUB_AVAILABLE)
@@ -932,16 +877,10 @@ with tabs[2]:
             st.metric("السعة المتاحة", f"{MAX_ACTIVE_USERS} مستخدم")
 
 # -------------------------------
-# Tab 4: التقارير والإحصائيات - الإصدار المصحح
+# Tab 4: التقارير والإحصائيات - الإصدار المعدل
 # -------------------------------
 with tabs[3]:
     st.header("📈 التقارير والإحصائيات")
-    
-    # زر تحديث البيانات
-    col1, col2 = st.columns([3, 1])
-    with col2:
-        if st.button("🔄 تحديث البيانات", key="refresh_tab4", use_container_width=True):
-            clear_cache_and_reload()
     
     if not os.path.exists(LOCAL_FILE):
         st.warning("⚠ لا توجد بيانات لعرض التقارير")
@@ -949,9 +888,7 @@ with tabs[3]:
         with st.spinner("🔄 جاري تحميل البيانات..."):
             sheets_data = load_excel_fresh()
         
-        if not sheets_data:
-            st.error("❌ لا يمكن تحميل البيانات من الملف")
-        else:
+        if sheets_data:
             col1, col2, col3 = st.columns(3)
             
             with col1:
@@ -968,35 +905,27 @@ with tabs[3]:
             
             st.markdown("---")
             
-            # تحليل شيتات الماكينات - الإصدار المصحح
+            # تحليل شيتات الماكينات - الإصدار المعدل
             st.subheader("📋 تحليل شيتات الماكينات")
+            machine_data = []
             
-            if card_sheets:
-                machine_data = []
+            for sheet_name in card_sheets:
+                df = sheets_data[sheet_name]
+                first_date, last_date = safe_date_analysis(df, 'Date')
                 
-                for sheet_name in card_sheets:
-                    df = sheets_data[sheet_name]
-                    
-                    # استخدام الدالة المحسنة لتحليل التواريخ
-                    first_date, last_date = safe_date_analysis(df, 'Date')
-                    
-                    machine_data.append({
-                        "الشيت": sheet_name,
-                        "عدد الصفوف": len(df),
-                        "عدد الأعمدة": len(df.columns),
-                        "أول تاريخ": first_date,
-                        "آخر تاريخ": last_date
-                    })
-                
-                if machine_data:
-                    machine_df = pd.DataFrame(machine_data)
-                    st.dataframe(machine_df, use_container_width=True)
-                else:
-                    st.info("📭 لا توجد بيانات لشيتات الماكينات")
-            else:
-                st.info("📭 لا توجد شيتات ماكينات (Card) للتحليل")
+                machine_data.append({
+                    "الشيت": sheet_name,
+                    "عدد الصفوف": len(df),
+                    "عدد الأعمدة": len(df.columns),
+                    "أول تاريخ": first_date,
+                    "آخر تاريخ": last_date
+                })
             
-            # ServicePlan analysis - الإصدار المصحح
+            if machine_data:
+                machine_df = pd.DataFrame(machine_data)
+                st.dataframe(machine_df, use_container_width=True)
+            
+            # ServicePlan analysis - الإصدار المعدل
             st.subheader("📊 تحليل خطط الصيانة")
             if "ServicePlan" in sheets_data:
                 service_df = sheets_data["ServicePlan"]
@@ -1008,116 +937,57 @@ with tabs[3]:
                     
                     # حساب نطاق الأطنان بشكل آمن
                     try:
-                        if 'Min_Tones' in service_df.columns and 'Max_Tones' in service_df.columns:
-                            min_tones = service_df['Min_Tones'].min()
-                            max_tones = service_df['Max_Tones'].max()
-                            st.write(f"- نطاق الأطنان: {min_tones} إلى {max_tones}")
-                        else:
-                            st.write("- نطاق الأطنان: غير متوفر")
-                    except Exception as e:
-                        st.write(f"- نطاق الأطنان: خطأ في الحساب - {e}")
+                        min_tones = service_df['Min_Tones'].min()
+                        max_tones = service_df['Max_Tones'].max()
+                        st.write(f"- نطاق الأطنان: {min_tones} إلى {max_tones}")
+                    except:
+                        st.write("- نطاق الأطنان: غير متوفر")
                 
                 with col2:
                     if 'Service' in service_df.columns:
                         try:
-                            # تحويل القيم إلى نص قبل التقسيم
-                            services = service_df['Service'].fillna('').astype(str)
-                            services_split = services.str.split('[+,]').explode().str.strip()
-                            services_split = services_split[services_split != '']
-                            
-                            if not services_split.empty:
-                                service_counts = services_split.value_counts()
-                                st.write("*الخدمات الأكثر تكراراً:*")
-                                for service, count in service_counts.head(5).items():
-                                    st.write(f"- {service}: {count} مرة")
-                            else:
-                                st.write("- لا توجد خدمات للتحليل")
-                        except Exception as e:
-                            st.write(f"- تحليل الخدمات: خطأ - {e}")
-                    else:
-                        st.write("- تحليل الخدمات: عمود الخدمات غير موجود")
-            else:
-                st.info("📭 لا يوجد شيت ServicePlan للتحليل")
+                            services = service_df['Service'].str.split('[+,]').explode().str.strip()
+                            service_counts = services.value_counts()
+                            st.write("*الخدمات الأكثر تكراراً:*")
+                            for service, count in service_counts.head(5).items():
+                                st.write(f"- {service}: {count} مرة")
+                        except:
+                            st.write("- تحليل الخدمات: غير متوفر")
             
-            # إحصائيات إضافية
-            st.markdown("---")
-            st.subheader("📈 إحصائيات إضافية")
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                st.write("*معلومات الشيتات:*")
-                for sheet_name, df in list(sheets_data.items())[:5]:  # عرض أول 5 شيتات فقط
-                    st.write(f"- {sheet_name}: {len(df)} صف، {len(df.columns)} عمود")
-                
-                if len(sheets_data) > 5:
-                    st.write(f"- ... و{len(sheets_data) - 5} شيتات أخرى")
-            
-            with col2:
-                st.write("*حالة النظام:*")
-                st.write(f"- وقت التحميل: {datetime.now().strftime('%H:%M:%S')}")
-                if os.path.exists(LOCAL_FILE):
-                    st.write(f"- حجم الملف: {os.path.getsize(LOCAL_FILE):,} بايت")
-                active_users = len([u for u, info in load_state().items() if info.get('active')])
-                st.write(f"- عدد المستخدمين النشطين: {active_users}")
-            
-            # تنزيل التقارير - الإصدار المصحح
+            # تنزيل التقارير
             st.markdown("---")
             st.subheader("📥 تنزيل التقارير")
             
             report_type = st.selectbox("اختر نوع التقرير:", 
-                                     ["ملخص عام", "تحليل الماكينات", "خطط الصيانة", "جميع البيانات"])
+                                     ["ملخص عام", "تحليل الماكينات", "خطط الصيانة"])
             
-            if st.button("🔄 إنشاء التقرير", type="primary", key="generate_report"):
+            if st.button("🔄 إنشاء التقرير", type="primary"):
                 with st.spinner("جاري إنشاء التقرير..."):
                     try:
+                        if report_type == "ملخص عام":
+                            report_data = {
+                                "إجمالي الشيتات": total_sheets,
+                                "إجمالي الصفوف": total_rows,
+                                "شيتات الماكينات": len(card_sheets),
+                                "وقت الإنشاء": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            }
+                            report_df = pd.DataFrame([report_data])
+                        elif report_type == "تحليل الماكينات":
+                            report_df = machine_df
+                        else:
+                            report_df = service_df
+                        
                         buffer = io.BytesIO()
+                        report_df.to_excel(buffer, index=False, engine="openpyxl")
                         
-                        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-                            if report_type == "ملخص عام":
-                                summary_data = {
-                                    "الإحصائية": [
-                                        "إجمالي الشيتات", 
-                                        "إجمالي الصفوف", 
-                                        "شيتات الماكينات",
-                                        "وقت الإنشاء"
-                                    ],
-                                    "القيمة": [
-                                        total_sheets,
-                                        total_rows,
-                                        len(card_sheets),
-                                        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                                    ]
-                                }
-                                pd.DataFrame(summary_data).to_excel(writer, sheet_name="ملخص عام", index=False)
-                                
-                            elif report_type == "تحليل الماكينات" and card_sheets:
-                                if 'machine_df' in locals():
-                                    machine_df.to_excel(writer, sheet_name="تحليل الماكينات", index=False)
-                                else:
-                                    st.warning("⚠ لا توجد بيانات لتحليل الماكينات")
-                                    
-                                
-                            elif report_type == "خطط الصيانة" and "ServicePlan" in sheets_data:
-                                service_df.to_excel(writer, sheet_name="خطط الصيانة", index=False)
-                                
-                            elif report_type == "جميع البيانات":
-                                for sheet_name, df in sheets_data.items():
-                                    # تقليل طول اسم الشيت إذا كان طويلاً جداً
-                                    safe_sheet_name = sheet_name[:31]  # Excel limit
-                                    df.to_excel(writer, sheet_name=safe_sheet_name, index=False)
-                        
-                        # تقديم زر التحميل فقط إذا كان التقرير يحتوي على بيانات
                         st.download_button(
                             label="💾 تحميل التقرير",
                             data=buffer.getvalue(),
                             file_name=f"report_{report_type}{datetime.now().strftime('%Y%m%d%H%M')}.xlsx",
-                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                            key="download_report"
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                         )
-                        
                     except Exception as e:
-                        st.error(f"❌ خطأ في إنشاء التقرير: {str(e)}")
+                        st.error(f"❌ خطأ في إنشاء التقرير: {e}")
 
 # -------------------------------
 # تذييل الصفحة والمساعدة
@@ -1148,7 +1018,9 @@ with st.sidebar.expander("ℹ المساعدة والدعم"):
     - يمكن العمل من أي مكان
     
     *📞 الدعم الفني:*
-    - في حالة وجود مشاكل او محتاج دعم فني مقترح يرجي تواصل عبر واتساب (01274424062)
+    - في حالة وجود مشاكل
+    - تأكد من اتصال GitHub
+    - تحقق من صحة البيانات
     """)
 
 st.markdown("---")
@@ -1170,4 +1042,3 @@ if not os.path.exists(LOCAL_FILE):
         st.rerun()
     else:
         st.sidebar.error("❌ فشل التحميل الأولي")
-
