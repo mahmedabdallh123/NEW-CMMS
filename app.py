@@ -1096,7 +1096,7 @@ with tabs[3]:
                                     machine_df.to_excel(writer, sheet_name="تحليل الماكينات", index=False)
                                 else:
                                     st.warning("⚠ لا توجد بيانات لتحليل الماكينات")
-                                    return
+                                    
                                 
                             elif report_type == "خطط الصيانة" and "ServicePlan" in sheets_data:
                                 service_df.to_excel(writer, sheet_name="خطط الصيانة", index=False)
@@ -1170,3 +1170,4 @@ if not os.path.exists(LOCAL_FILE):
         st.rerun()
     else:
         st.sidebar.error("❌ فشل التحميل الأولي")
+
