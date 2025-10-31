@@ -1,266 +1,429 @@
 import streamlit as st
 import pandas as pd
-import re
-import time
 import json
 import os
-import streamlit.components.v1 as components
+import io
 import requests
-import shutil
-import hashlib
+import re
+import time
+from datetime import datetime, timedelta
 
 # ===============================
-# ⚙ إعدادات أساسية
+# إعدادات أساسية
 # ===============================
-GITHUB_EXCEL_URL = "https://github.com/mahmedabdallh123/NEW-CMMS/raw/refs/heads/main/Machine_Service_Lookup.xlsx"
-TOKENS_FILE = "tokens.json"
-TRIAL_SECONDS = 60
-RENEW_HOURS = 24
-PASSWORD = "1234"
+USERS_FILE = "users.json"
+STATE_FILE = "state.json"
+LOCAL_FILE = "Machine_Service_Lookup.xlsx"
 
-# ===============================
-# 📂 تحميل البيانات من GitHub (مع بصمة)
-# ===============================
-def get_file_hash(filepath):
-    """احسب بصمة الملف SHA256"""
-    if not os.path.exists(filepath):
-        return None
-    with open(filepath, "rb") as f:
-        return hashlib.sha256(f.read()).hexdigest()
-
-@st.cache_data
-def load_all_sheets():
+# -------------------------------
+# دوال الملفات والمستخدمين
+# -------------------------------
+def load_users():
+    """تحميل بيانات المستخدمين"""
+    if not os.path.exists(USERS_FILE):
+        default = {"admin": {"password": "admin", "role": "admin"}}
+        with open(USERS_FILE, "w", encoding="utf-8") as f:
+            json.dump(default, f, indent=4, ensure_ascii=False)
+        return default
     try:
-        local_file = "Machine_Service_Lookup.xlsx"
-        hash_file = "file_hash.txt"
+        with open(USERS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        st.error(f"❌ خطأ في ملف users.json: {e}")
+        st.stop()
 
-        # تحميل الملف من GitHub
-        r = requests.get(GITHUB_EXCEL_URL, stream=True)
-        content = r.content
-        new_hash = hashlib.sha256(content).hexdigest()
+def save_users(users):
+    """حفظ بيانات المستخدمين"""
+    with open(USERS_FILE, "w", encoding="utf-8") as f:
+        json.dump(users, f, indent=4, ensure_ascii=False)
 
-        # قراءة البصمة القديمة (إن وجدت)
-        old_hash = None
-        if os.path.exists(hash_file):
-            with open(hash_file, "r") as f:
-                old_hash = f.read().strip()
+def load_state():
+    """تحميل حالة الجلسات"""
+    if not os.path.exists(STATE_FILE):
+        with open(STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump({}, f, indent=4, ensure_ascii=False)
+        return {}
+    try:
+        with open(STATE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
 
-        # التحقق إذا الملف فعلاً اتغير
-        if old_hash != new_hash:
-            with open(local_file, "wb") as f:
-                f.write(content)
-            with open(hash_file, "w") as f:
-                f.write(new_hash)
-            try:
-                st.cache_data.clear()
-            except:
-                pass
-            st.info("🔄 تم تحميل نسخة جديدة من الملف (تغيرت البصمة).")
-        else:
-            st.info("♻ الملف لم يتغير (نفس البصمة).")
+def save_state(state):
+    """حفظ حالة الجلسات"""
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(state, f, indent=4, ensure_ascii=False)
 
-        # قراءة البيانات من الملف المحلي
-        sheets = pd.read_excel(local_file, sheet_name=None)
+# -------------------------------
+# دوال الملفات الأساسية
+# -------------------------------
+def load_excel_fresh():
+    """قراءة الملف مباشرة من القرص"""
+    if not os.path.exists(LOCAL_FILE):
+        return {}
+    
+    try:
+        sheets = pd.read_excel(LOCAL_FILE, sheet_name=None)
         for name, df in sheets.items():
             df.columns = df.columns.str.strip()
         return sheets
-
     except Exception as e:
-        st.error(f"❌ خطأ أثناء تحميل الملف من GitHub: {e}")
-        st.stop()
+        st.error(f"❌ خطأ في قراءة الملف: {e}")
+        return {}
 
-# ===============================
-# 🔑 نظام التجربة المجانية
-# ===============================
-def load_tokens():
-    if not os.path.exists(TOKENS_FILE):
-        with open(TOKENS_FILE, "w") as f:
-            json.dump({}, f)
+def load_excel_for_edit():
+    """تحميل الملف للتحرير"""
+    if not os.path.exists(LOCAL_FILE):
         return {}
     try:
-        with open(TOKENS_FILE, "r") as f:
-            content = f.read().strip()
-            if not content:
-                return {}
-            return json.loads(content)
-    except (json.JSONDecodeError, ValueError):
-        with open(TOKENS_FILE, "w") as f:
-            json.dump({}, f)
+        sheets = pd.read_excel(LOCAL_FILE, sheet_name=None, dtype=object)
+        for name, df in sheets.items():
+            df.columns = df.columns.str.strip()
+        return sheets
+    except Exception as e:
+        st.error(f"❌ خطأ في قراءة الملف للتحرير: {e}")
         return {}
 
-def save_tokens(tokens):
-    with open(TOKENS_FILE, "w") as f:
-        json.dump(tokens, f, indent=4, ensure_ascii=False)
-
-def check_free_trial(user_id="default_user"):
-    tokens = load_tokens()
-    now_ts = int(time.time())
-
-    if user_id not in tokens:
-        tokens[user_id] = {"last_trial": 0}
-        save_tokens(tokens)
-
-    last_trial = tokens[user_id]["last_trial"]
-    hours_since_last = (now_ts - last_trial) / 3600
-
-    if "trial_start" in st.session_state:
-        elapsed = now_ts - st.session_state["trial_start"]
-        if elapsed < TRIAL_SECONDS:
-            st.info(f"✅ التجربة المجانية مفعّلة — متبقي {TRIAL_SECONDS - elapsed:.0f} ثانية")
+def save_excel_locally(sheets_dict):
+    """حفظ الملف محلياً فقط"""
+    try:
+        with pd.ExcelWriter(LOCAL_FILE, engine='openpyxl') as writer:
+            for name, df in sheets_dict.items():
+                df.to_excel(writer, sheet_name=name, index=False)
+        
+        if os.path.exists(LOCAL_FILE):
+            file_size = os.path.getsize(LOCAL_FILE)
+            st.success(f"✅ تم الحفظ المحلي | الحجم: {file_size} بايت")
             return True
         else:
-            st.warning("⏰ انتهت التجربة المجانية. يمكنك إعادة التجربة بعد 24 ساعة أو الدخول بالباسورد.")
-            password = st.text_input("أدخل كلمة المرور للوصول:", type="password")
-            if password == PASSWORD:
-                st.session_state["access_granted"] = True
-                st.success("✅ تم تسجيل الدخول بالباسورد.")
-                return True
+            st.error("❌ فشل الحفظ المحلي")
             return False
-
-    if hours_since_last >= RENEW_HOURS:
-        if st.button("تفعيل التجربة المجانية 60 ثانية"):
-            tokens[user_id]["last_trial"] = now_ts
-            save_tokens(tokens)
-            st.session_state["trial_start"] = now_ts
-            st.experimental_rerun()
+            
+    except Exception as e:
+        st.error(f"❌ خطأ في الحفظ: {e}")
         return False
 
-    remaining_hours = max(0, RENEW_HOURS - hours_since_last)
-    st.warning(f"🔒 انتهت التجربة المجانية. يمكنك إعادة التجربة بعد {remaining_hours:.1f} ساعة أو الدخول بالباسورد.")
-    password = st.text_input("أدخل كلمة المرور للوصول:", type="password")
-    if password == PASSWORD:
-        st.session_state["access_granted"] = True
-        st.success("✅ تم تسجيل الدخول بالباسورد.")
-        return True
-    return False
+# -------------------------------
+# واجهة المستخدم البسيطة
+# -------------------------------
+def login_ui():
+    """واجهة تسجيل الدخول"""
+    users = load_users()
+    
+    if "logged_in" not in st.session_state:
+        st.session_state.logged_in = False
+        st.session_state.username = None
 
-# ===============================
-# 🔠 دوال مساعدة
-# ===============================
+    st.title("🔐 تسجيل الدخول - نظام الصيانة")
+
+    username_input = st.selectbox("👤 اختر المستخدم", list(users.keys()))
+    password = st.text_input("🔑 كلمة المرور", type="password")
+
+    if not st.session_state.logged_in:
+        if st.button("تسجيل الدخول", type="primary"):
+            if username_input in users and users[username_input]["password"] == password:
+                st.session_state.logged_in = True
+                st.session_state.username = username_input
+                st.success(f"✅ تم تسجيل الدخول: {username_input}")
+                st.rerun()
+            else:
+                st.error("❌ كلمة المرور غير صحيحة.")
+        return False
+    else:
+        username = st.session_state.username
+        st.success(f"✅ مسجل الدخول كـ: {username}")
+        if st.button("🚪 تسجيل الخروج"):
+            st.session_state.logged_in = False
+            st.session_state.username = None
+            st.rerun()
+        return True
+
+# -------------------------------
+# أدوات الفحص
+# -------------------------------
 def normalize_name(s):
+    """تطبيع الأسماء"""
     if s is None:
         return ""
-    s = str(s)
-    s = s.replace("\n", "+")
+    s = str(s).replace("\n", "+")
     s = re.sub(r"[^0-9a-zA-Z\u0600-\u06FF\+\s_/.-]", " ", s)
     s = re.sub(r"\s+", " ", s).strip().lower()
     return s
 
 def split_needed_services(needed_service_str):
+    """تقسيم الخدمات المطلوبة"""
     if not isinstance(needed_service_str, str) or needed_service_str.strip() == "":
         return []
     parts = re.split(r"\+|,|\n|;", needed_service_str)
     return [p.strip() for p in parts if p.strip() != ""]
 
-# ===============================
-# ⚙ دالة مقارنة الصيانة
-# ===============================
-def check_machine_status(card_num, current_tons, all_sheets):
-    if "ServicePlan" not in all_sheets or "Machine" not in all_sheets:
-        st.error("❌ الملف لازم يحتوي على شيتين: 'Machine' و 'ServicePlan'")
+def check_machine_status_simple(card_num, current_tons):
+    """فحص مبسط للماكينات"""
+    
+    with st.spinner("🔄 جاري تحميل البيانات..."):
+        all_sheets = load_excel_fresh()
+    
+    if not all_sheets:
+        st.error("❌ لا يمكن تحميل الملف")
         return
-
+    
+    if "ServicePlan" not in all_sheets:
+        st.error("❌ الملف لا يحتوي على شيت ServicePlan.")
+        return
+    
     service_plan_df = all_sheets["ServicePlan"]
     card_sheet_name = f"Card{card_num}"
+    
     if card_sheet_name not in all_sheets:
         st.warning(f"⚠ لا يوجد شيت باسم {card_sheet_name}")
         return
-
+    
     card_df = all_sheets[card_sheet_name]
 
-    # شريحة الرنج المناسبة
+    # البحث عن الشريحة الحالية فقط
     current_slice = service_plan_df[
-        (service_plan_df["Min_Tones"] <= current_tons) &
+        (service_plan_df["Min_Tones"] <= current_tons) & 
         (service_plan_df["Max_Tones"] >= current_tons)
     ]
-
+    
     if current_slice.empty:
-        st.warning("⚠ لم يتم العثور على شريحة تناسب عدد الأطنان الحالي.")
+        st.warning("⚠ لا توجد شريحة مطابقة للأطنان الحالية.")
         return
 
-    min_tons = current_slice["Min_Tones"].values[0]
-    max_tons = current_slice["Max_Tones"].values[0]
-    needed_service_raw = current_slice["Service"].values[0]
+    current_slice = current_slice.iloc[0]
+    slice_min = current_slice["Min_Tones"]
+    slice_max = current_slice["Max_Tones"]
+    needed_service_raw = current_slice.get("Service", "")
     needed_parts = split_needed_services(needed_service_raw)
-    needed_norm = [normalize_name(p) for p in needed_parts]
 
-    # فلترة الخدمات المنفذة ضمن الرنج
-    slice_df = card_df[
-        (card_df["Tones"] >= min_tons) &
-        (card_df["Tones"] <= max_tons)
-    ]
+    # البحث في سجل الماكينة
+    mask = (card_df.get("Min_Tones", 0).fillna(0) <= slice_max) & (card_df.get("Max_Tones", 0).fillna(0) >= slice_min)
+    matching_rows = card_df[mask]
 
-    done_services, last_date, last_tons = [], "-", "-"
-    extra_done = []
+    done_services_set = set()
+    last_date = "-"
+    last_tons = "-"
 
-    # كل الصفوف في الشيت
-    all_done_services_norm = []
-    for idx, row in card_df.iterrows():
-        row_services = []
-        ignore_cols = ["card", "Tones", "Date", "Min_Tones", "Max_Tones"]
-        for col in card_df.columns:
-            if col not in ignore_cols:
-                val = str(row.get(col, "")).strip().lower()
-                if val and val not in ["nan", "none", ""]:
-                    row_services.append(col)
-        row_norm = [normalize_name(c) for c in row_services]
-        all_done_services_norm.extend(row_norm)
+    if not matching_rows.empty:
+        ignore_cols = {"card", "Tones", "Min_Tones", "Max_Tones", "Date", "Other", "Servised by"}
+        for _, r in matching_rows.iterrows():
+            for col in matching_rows.columns:
+                if col not in ignore_cols:
+                    val = str(r.get(col, "")).strip()
+                    if val and val.lower() not in ["nan", "none", ""]:
+                        done_services_set.add(col)
+        
+        if "Date" in matching_rows.columns:
+            try:
+                dates = pd.to_datetime(matching_rows["Date"], errors="coerce")
+                if dates.notna().any():
+                    last_date = dates.max().strftime("%d/%m/%Y")
+            except:
+                last_date = "-"
+        
+        if "Tones" in matching_rows.columns:
+            tons_vals = pd.to_numeric(matching_rows["Tones"], errors="coerce")
+            if tons_vals.notna().any():
+                last_tons = int(tons_vals.max())
 
-        # إذا الرنج الحالي
-        if min_tons <= row.get("Tones", 0) <= max_tons:
-            done_services.extend(row_services)
-            last_date = row.get("Date", "-")
-            last_tons = row.get("Tones", "-")
+    done_services = sorted(list(done_services_set))
+    not_done = [service for service in needed_parts if service not in done_services]
 
-    # Not Done
-    done_norm = [normalize_name(c) for c in done_services]
-    not_done = [orig for orig, n in zip(needed_parts, needed_norm) if n not in done_norm]
+    # عرض النتائج
+    st.subheader("📋 نتيجة الفحص")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.info(f"*الماكينة:* Card{card_num}")
+        st.info(f"*الأطنان الحالية:* {current_tons}")
+        st.info(f"*الشريحة:* {slice_min} - {slice_max} طن")
+    
+    with col2:
+        st.info(f"*آخر صيانة:* {last_date}")
+        st.info(f"*آخر أطنان:* {last_tons}")
+    
+    st.subheader("🔧 الخدمات")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.success("*الخدمات المنجزة:*")
+        if done_services:
+            for service in done_services:
+                st.write(f"✅ {service}")
+        else:
+            st.write("لا توجد خدمات منجزة")
+    
+    with col2:
+        st.error("*الخدمات المطلوبة:*")
+        if not_done:
+            for service in not_done:
+                st.write(f"❌ {service}")
+        else:
+            st.write("جميع الخدمات مكتملة ✓")
 
-    # Extra Done
-    extra_done = [orig for orig, n in zip(needed_parts, needed_norm) if n in all_done_services_norm and n not in done_norm]
+# -------------------------------
+# الواجهة الرئيسية
+# -------------------------------
+st.set_page_config(page_title="نظام إدارة الصيانة", layout="wide")
 
-    result = {
-        "Card": card_num,
-        "Current_Tons": current_tons,
-        "Service Needed": " + ".join(needed_parts) if needed_parts else "-",
-        "Done Services": ", ".join(done_services) if done_services else "-",
-        "Not Done Services": ", ".join(not_done) if not_done else "-",
-        "Extra Done": ", ".join(extra_done) if extra_done else "-",
-        "Date": last_date,
-        "Tones": last_tons,
-    }
+with st.sidebar:
+    st.header("👤 الجلسة")
+    if not login_ui():
+        st.stop()
+    
+    st.markdown("---")
+    st.header("🔄 التحكم في البيانات")
+    
+    if st.button("🔄 تحديث الصفحة", use_container_width=True):
+        st.rerun()
+    
+    if st.button("📊 تحميل البيانات", use_container_width=True):
+        if os.path.exists(LOCAL_FILE):
+            st.success("✅ تم تحميل البيانات")
+        else:
+            st.error("❌ الملف غير موجود")
+    
+    st.markdown("---")
+    st.header("📊 حالة النظام")
+    
+    if os.path.exists(LOCAL_FILE):
+        file_time = datetime.fromtimestamp(os.path.getmtime(LOCAL_FILE))
+        file_size = os.path.getsize(LOCAL_FILE)
+        st.success(f"📁 الملف: {file_time.strftime('%H:%M:%S')}")
+        st.info(f"📊 الحجم: {file_size:,} بايت")
+        
+        try:
+            sheets = load_excel_fresh()
+            if sheets:
+                st.info(f"📋 عدد الشيتات: {len(sheets)}")
+        except:
+            pass
+    else:
+        st.error("❌ الملف غير موجود")
 
-    result_df = pd.DataFrame([result])
-    st.dataframe(result_df, use_container_width=True)
+# التبويبات الرئيسية
+st.title("🏭 نظام إدارة صيانة الماكينات")
+st.markdown("الإصدار المبسط - يعمل بدون اتصال بالإنترنت")
 
-    if st.button("💾 حفظ النتيجة في Excel"):
-        result_df.to_excel("Machine_Result.xlsx", index=False)
-        st.success("✅ تم حفظ النتيجة في ملف 'Machine_Result.xlsx' بنجاح.")
+tabs = st.tabs(["📊 فحص الماكينات", "🛠 تعديل البيانات", "⚙ إدارة المستخدمين"])
 
-# ===============================
-# 🖥 واجهة Streamlit
-# ===============================
-st.title("🔧 نظام متابعة الصيانة التنبؤية")
+# -------------------------------
+# Tab 1: فحص الماكينات
+# -------------------------------
+with tabs[0]:
+    st.header("📊 فحص حالة الماكينات")
+    
+    if not os.path.exists(LOCAL_FILE):
+        st.error("❌ ملف البيانات غير موجود. تأكد من وجود الملف في نفس المجلد.")
+        st.info("""
+        *لحل المشكلة:*
+        1. تأكد من وجود ملف Machine_Service_Lookup.xlsx في نفس المجلد
+        2. إذا لم يكن موجوداً، انسخه إلى هذا المكان
+        3. اضغط على زر 'تحديث الصفحة'
+        """)
+    else:
+        col1, col2 = st.columns(2)
+        with col1:
+            card_num = st.number_input("رقم الماكينة:", min_value=1, step=1, value=1)
+        with col2:
+            current_tons = st.number_input("عدد الأطنان الحالية:", min_value=0, step=100, value=1000)
 
-# زر تحديث الكاش بطريقة آمنة
-if "refresh" not in st.session_state:
-    st.session_state["refresh"] = False
+        if st.button("🔍 فحص الحالة", type="primary", use_container_width=True):
+            check_machine_status_simple(card_num, current_tons)
 
-if st.button("🔄 تحديث البيانات من GitHub"):
-    st.cache_data.clear()
-    st.session_state["refresh"] = True
+# -------------------------------
+# Tab 2: تعديل البيانات
+# -------------------------------
+with tabs[1]:
+    st.header("🛠 تعديل البيانات")
+    
+    if not os.path.exists(LOCAL_FILE):
+        st.error("❌ ملف البيانات غير موجود")
+    else:
+        with st.spinner("جاري تحميل البيانات..."):
+            sheets_data = load_excel_for_edit()
+        
+        if not sheets_data:
+            st.error("❌ لا يمكن تحميل البيانات")
+        else:
+            sheet_name = st.selectbox("اختر الشيت للتعديل:", list(sheets_data.keys()))
+            
+            if sheet_name in sheets_data:
+                df = sheets_data[sheet_name].copy()
+                st.write(f"*عدد الصفوف:* {len(df)} | *عدد الأعمدة:* {len(df.columns)}")
+                
+                st.subheader("✏ تعديل البيانات")
+                edited_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
 
-if st.session_state["refresh"]:
-    st.session_state["refresh"] = False
-    all_sheets = load_all_sheets()
-else:
-    if check_free_trial(user_id="default_user") or st.session_state.get("access_granted", False):
-        all_sheets = load_all_sheets()
+                if st.button("💾 حفظ التعديلات", type="primary", use_container_width=True):
+                    sheets_data[sheet_name] = edited_df
+                    if save_excel_locally(sheets_data):
+                        st.success("✅ تم الحفظ بنجاح! اضغط على زر 'تحديث الصفحة' لرؤية التغييرات.")
 
-# إدخال بيانات الماكينة
-if 'all_sheets' in locals():
-    st.write("أدخل رقم الماكينة وعدد الأطنان الحالية لمعرفة حالة الصيانة")
-    card_num = st.number_input("رقم الماكينة:", min_value=1, step=1)
-    current_tons = st.number_input("عدد الأطنان الحالية:", min_value=0, step=100)
-    if st.button("عرض الحالة"):
-        check_machine_status(card_num, current_tons, all_sheets)
+# -------------------------------
+# Tab 3: إدارة المستخدمين
+# -------------------------------
+with tabs[2]:
+    st.header("⚙ إدارة المستخدمين")
+    users = load_users()
+    username = st.session_state.get("username")
+
+    if username != "admin":
+        st.info("🛑 فقط المستخدم 'admin' يمكنه إدارة المستخدمين.")
+        st.write("👥 المستخدمين الحاليين:", ", ".join(users.keys()))
+    else:
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.subheader("👥 المستخدمين الموجودين")
+            for user, info in users.items():
+                role = info.get("role", "مستخدم")
+                st.write(f"- *{user}* ({role})")
+            
+            st.subheader("🗑 حذف مستخدم")
+            del_user = st.selectbox("اختر مستخدم للحذف:", 
+                                   [u for u in users.keys() if u != "admin"])
+            
+            if st.button("حذف المستخدم", type="secondary", use_container_width=True):
+                if del_user in users:
+                    users.pop(del_user)
+                    save_users(users)
+                    st.success(f"✅ تم حذف المستخدم '{del_user}'")
+                    st.rerun()
+
+        with col2:
+            st.subheader("➕ إضافة مستخدم جديد")
+            
+            new_user = st.text_input("اسم المستخدم الجديد:")
+            new_pass = st.text_input("كلمة المرور:", type="password")
+            confirm_pass = st.text_input("تأكيد كلمة المرور:", type="password")
+            user_role = st.selectbox("دور المستخدم:", ["مستخدم", "مشرف"])
+            
+            if st.button("إضافة مستخدم", type="primary", use_container_width=True):
+                if not new_user or not new_pass:
+                    st.warning("⚠ الرجاء إدخال اسم المستخدم وكلمة المرور")
+                elif new_pass != confirm_pass:
+                    st.error("❌ كلمة المرور غير متطابقة")
+                elif new_user in users:
+                    st.warning("⚠ هذا المستخدم موجود بالفعل")
+                else:
+                    users[new_user] = {
+                        "password": new_pass,
+                        "role": user_role
+                    }
+                    save_users(users)
+                    st.success(f"✅ تم إضافة المستخدم '{new_user}' بنجاح")
+                    st.rerun()
+
+# -------------------------------
+# تذييل الصفحة
+# -------------------------------
+st.markdown("---")
+st.markdown("""
+<div style="text-align: center; color: gray;">
+    <p><strong>نظام إدارة صيانة الماكينات</strong></p>
+    <p>الإصدار المبسط | © 2024</p>
+</div>
+""", unsafe_allow_html=True)
