@@ -11,7 +11,7 @@ import shutil
 # ===============================
 # ⚙ إعدادات أساسية
 # ===============================
-GITHUB_EXCEL_URL = "https://github.com/mahmedabdallh123/cmms/raw/refs/heads/main/Machine_Service_Lookup.xlsx"
+GITHUB_EXCEL_URL = "https://github.com/mahmedabdallh123/NEW-CMMS/raw/refs/heads/main/Machine_Service_Lookup.xlsx"
 TOKENS_FILE = "tokens.json"
 TRIAL_SECONDS = 60
 RENEW_HOURS = 24
@@ -230,3 +230,4 @@ if 'all_sheets' in locals():
     current_tons = st.number_input("عدد الأطنان الحالية:", min_value=0, step=100)
     if st.button("عرض الحالة"):
         check_machine_status(card_num, current_tons, all_sheets)
+
