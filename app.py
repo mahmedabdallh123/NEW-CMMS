@@ -35,9 +35,10 @@ GITHUB_EXCEL_URL = "https://github.com/mahmedabdallh123/input-data/raw/refs/head
 # 🧩 دوال مساعدة للملفات والحالة
 # -------------------------------
 def load_users():
+    """تحميل بيانات المستخدمين من ملف JSON"""
     if not os.path.exists(USERS_FILE):
         # انشئ ملف افتراضي اذا مش موجود (يوجد admin بكلمة مرور افتراضية "admin" — غيرها فورًا)
-        default = {"admin": {"password": "admin"}}
+        default = {"admin": {"password": "admin", "role": "admin", "created_at": datetime.now().isoformat()}}
         with open(USERS_FILE, "w", encoding="utf-8") as f:
             json.dump(default, f, indent=4, ensure_ascii=False)
         return default
@@ -46,11 +47,17 @@ def load_users():
             return json.load(f)
     except Exception as e:
         st.error(f"❌ خطأ في ملف users.json: {e}")
-        st.stop()
+        return {"admin": {"password": "admin", "role": "admin", "created_at": datetime.now().isoformat()}}
 
 def save_users(users):
-    with open(USERS_FILE, "w", encoding="utf-8") as f:
-        json.dump(users, f, indent=4, ensure_ascii=False)
+    """حفظ بيانات المستخدمين إلى ملف JSON"""
+    try:
+        with open(USERS_FILE, "w", encoding="utf-8") as f:
+            json.dump(users, f, indent=4, ensure_ascii=False)
+        return True
+    except Exception as e:
+        st.error(f"❌ خطأ في حفظ ملف users.json: {e}")
+        return False
 
 def load_state():
     if not os.path.exists(STATE_FILE):
@@ -540,7 +547,7 @@ is_admin = username == "admin"
 
 # تحديد التبويبات بناءً على نوع المستخدم
 if is_admin:
-    tabs = st.tabs(["📊 عرض وفحص الماكينات", "🛠 تعديل وإدارة البيانات", "📞 الدعم الفني"])
+    tabs = st.tabs(["📊 عرض وفحص الماكينات", "🛠 تعديل وإدارة البيانات", "👥 إدارة المستخدمين", "📞 الدعم الفني"])
 else:
     tabs = st.tabs(["📊 عرض وفحص الماكينات", "📞 الدعم الفني"])
 
@@ -676,7 +683,7 @@ if is_admin and len(tabs) > 1:
                         else:
                             if new_min_num is not None and new_max_num is not None:
                                 mask = (
-                                    (pd.to_numeric(df_add[min_col], errors='coerce') == new_min_num) &
+                                    (pd.to-numeric(df_add[min_col], errors='coerce') == new_min_num) &
                                     (pd.to_numeric(df_add[max_col], errors='coerce') == new_max_num)
                                 )
                             else:
@@ -808,3 +815,144 @@ if is_admin and len(tabs) > 1:
                                     st.dataframe(sheets_edit[sheet_name_del])
                         except Exception as e:
                             st.error(f"حدث خطأ أثناء الحذف: {e}")
+
+# -------------------------------
+# Tab: إدارة المستخدمين - للمسؤول فقط
+# -------------------------------
+if is_admin and len(tabs) > 2:
+    with tabs[2]:
+        st.header("👥 إدارة المستخدمين")
+        
+        users = load_users()
+        
+        # عرض المستخدمين الحاليين
+        st.subheader("📋 المستخدمين الحاليين")
+        
+        if users:
+            # تحويل بيانات المستخدمين إلى DataFrame لعرضها
+            user_data = []
+            for username, info in users.items():
+                user_data.append({
+                    "اسم المستخدم": username,
+                    "الدور": info.get("role", "user"),
+                    "تاريخ الإنشاء": info.get("created_at", "غير معروف")
+                })
+            
+            users_df = pd.DataFrame(user_data)
+            st.dataframe(users_df, use_container_width=True)
+        else:
+            st.info("لا يوجد مستخدمين مسجلين بعد.")
+        
+        # إضافة مستخدم جديد
+        st.subheader("➕ إضافة مستخدم جديد")
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            new_username = st.text_input("اسم المستخدم الجديد:")
+        with col2:
+            new_password = st.text_input("كلمة المرور:", type="password")
+        with col3:
+            user_role = st.selectbox("الدور:", ["user", "admin"])
+        
+        if st.button("إضافة مستخدم", key="add_user"):
+            if not new_username.strip() or not new_password.strip():
+                st.warning("⚠ الرجاء إدخال اسم المستخدم وكلمة المرور.")
+            elif new_username in users:
+                st.warning("⚠ هذا المستخدم موجود بالفعل.")
+            else:
+                users[new_username] = {
+                    "password": new_password,
+                    "role": user_role,
+                    "created_at": datetime.now().isoformat()
+                }
+                if save_users(users):
+                    st.success(f"✅ تم إضافة المستخدم '{new_username}' بنجاح.")
+                    st.rerun()
+                else:
+                    st.error("❌ حدث خطأ أثناء حفظ بيانات المستخدم.")
+        
+        # حذف مستخدم
+        st.subheader("🗑 حذف مستخدم")
+        
+        if len(users) > 1:  # لا يمكن حذف جميع المستخدمين
+            user_to_delete = st.selectbox(
+                "اختر مستخدم للحذف:",
+                [u for u in users.keys() if u != "admin"],  # لا يمكن حذف admin
+                key="delete_user_select"
+            )
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                confirm_delete = st.checkbox("✅ تأكيد الحذف", key="confirm_user_delete")
+            with col2:
+                if st.button("حذف المستخدم", key="delete_user_btn"):
+                    if not confirm_delete:
+                        st.warning("⚠ يرجى تأكيد الحذف أولاً.")
+                    elif user_to_delete == "admin":
+                        st.error("❌ لا يمكن حذف المستخدم admin.")
+                    elif user_to_delete == st.session_state.get("username"):
+                        st.error("❌ لا يمكن حذف حسابك أثناء تسجيل الدخول.")
+                    else:
+                        if user_to_delete in users:
+                            del users[user_to_delete]
+                            if save_users(users):
+                                st.success(f"✅ تم حذف المستخدم '{user_to_delete}' بنجاح.")
+                                st.rerun()
+                            else:
+                                st.error("❌ حدث خطأ أثناء حفظ التغييرات.")
+        else:
+            st.info("لا يمكن حذف جميع المستخدمين. يجب أن يبقى مستخدم واحد على الأقل.")
+        
+        # إعادة تعيين كلمة المرور
+        st.subheader("🔑 إعادة تعيين كلمة المرور")
+        
+        if len(users) > 0:
+            user_to_reset = st.selectbox(
+                "اختر مستخدم لإعادة تعيين كلمة المرور:",
+                list(users.keys()),
+                key="reset_user_select"
+            )
+            
+            new_password_reset = st.text_input("كلمة المرور الجديدة:", type="password", key="new_password_reset")
+            
+            if st.button("إعادة تعيين كلمة المرور", key="reset_password_btn"):
+                if not new_password_reset.strip():
+                    st.warning("⚠ الرجاء إدخال كلمة المرور الجديدة.")
+                else:
+                    users[user_to_reset]["password"] = new_password_reset
+                    if save_users(users):
+                        st.success(f"✅ تم إعادة تعيين كلمة المرور للمستخدم '{user_to_reset}' بنجاح.")
+                        st.rerun()
+                    else:
+                        st.error("❌ حدث خطأ أثناء حفظ التغييرات.")
+
+# -------------------------------
+# Tab: الدعم الفني - لجميع المستخدمين
+# -------------------------------
+tech_support_tab_index = 1 if not is_admin else 3
+with tabs[tech_support_tab_index]:
+    st.header("📞 الدعم الفني")
+    
+    st.markdown("## 🛠 معلومات التطوير والدعم")
+    st.markdown("*تم تطوير هذا التطبيق بواسطة:*")
+    st.markdown("### *م. محمد عبدالله*")
+    st.markdown("### *رئيس قسم الكرد والمحطات*")
+    st.markdown("### *مصنع بيل يارن للغزل*")
+    st.markdown("---")
+    st.markdown("### *معلومات الاتصال:*")
+    st.markdown("- 📧 البريد الإلكتروني: m.abdallah@bailyarn.com")
+    st.markdown("- 📞 هاتف المصنع: 01000000000")
+    st.markdown("- 🏢 الموقع: مصنع بيل يارن للغزل")
+    st.markdown("---")
+    st.markdown("### *خدمات الدعم الفني:*")
+    st.markdown("- 🔧 صيانة وتحديث النظام")
+    st.markdown("- 📊 تطوير تقارير إضافية")
+    st.markdown("- 🐛 إصلاح الأخطاء والمشكلات")
+    st.markdown("- 💡 استشارات فنية وتقنية")
+    st.markdown("---")
+    st.markdown("### *إصدار التطبيق:*")
+    st.markdown("- الإصدار: 2.0")
+    st.markdown("- آخر تحديث: 2024")
+    st.markdown("- النظام: CMMS - نظام إدارة الصيانة")
+    
+    st.info("*ملاحظة:* في حالة مواجهة أي مشاكل تقنية أو تحتاج إلى إضافة ميزات جديدة، يرجى التواصل مع قسم الدعم الفني.")
